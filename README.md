@@ -31,8 +31,16 @@
 
 ### 1. Quick Install
 
+GitHub command:
+
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/AMTOPA/Overleaf-Sharelatex-Easy-Install/main/install.sh)
+```
+
+Alternative command:
+
+```bash
+bash <(curl -sL https://math-enthusiast.top/install.sh)
 ```
 
 ### 2. Manual Options

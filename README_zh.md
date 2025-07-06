@@ -30,8 +30,16 @@
 
 ### 1. 快速安装
 
+GitHub指令：
+
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/AMTOPA/Overleaf-Sharelatex-Easy-Install/main/install.sh)
+```
+
+备用指令：
+
+```bash
+bash <(curl -sL https://math-enthusiast.top/install.sh)
 ```
 
 ### 2. 高级选项

@@ -33,6 +33,7 @@
 
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/AMTOPA/Overleaf-Sharelatex-Easy-Install/main/install.sh)
+```
 
 ### 2. Manual Options
 
@@ -42,5 +43,3 @@ bash <(curl -sL https://raw.githubusercontent.com/AMTOPA/Overleaf-Sharelatex-Eas
 | Base Only    | `install.sh --base`    | Minimal installation     |
 | Chinese Pack | `install.sh --chinese` | CJK language support     |
 | Font Manager | `install.sh --fonts`   | Additional font packages |
-
-

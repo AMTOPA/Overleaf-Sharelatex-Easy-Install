@@ -32,12 +32,13 @@
 
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/AMTOPA/Overleaf-Sharelatex-Easy-Install/main/install.sh)
+```
 
 ### 2. 高级选项
 
-| 选项   | 命令                     | 说明                                |
-| ---- | ---------------------- | --------------------------------- |
-| 完整安装 | `install.sh --full`    | 基础服务+中文+字体                        |
-| 仅基础  | `install.sh --base`    | 最小化安装                             |
-| 中文包  | `install.sh --chinese` | 中文语言支持                            |
-| 字体管理 | `install.sh --fonts`   | 额外字体包 |
+| 选项   | 命令                     | 说明         |
+| ---- | ---------------------- | ---------- |
+| 完整安装 | `install.sh --full`    | 基础服务+中文+字体 |
+| 仅基础  | `install.sh --base`    | 最小化安装      |
+| 中文包  | `install.sh --chinese` | 中文语言支持     |
+| 字体管理 | `install.sh --fonts`   | 额外字体包      |

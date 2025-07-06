@@ -1,0 +1,43 @@
+<div align="center">
+<h1>OVERSEI: Overleaf 一键安装工具 🚀</h1>
+
+简体中文 | <a href="README.md">ENGLISH</a>
+
+[![GitHub release](https://img.shields.io/github/release/AMTOPA/Overleaf-Sharelatex-Easy-Install.svg?style=for-the-badge)](https://github.com/AMTOPA/Overleaf-Sharelatex-Easy-Install/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](https://opensource.org/licenses/MIT)
+[![Platform](https://img.shields.io/badge/platform-Linux%20|%20WSL-blue?style=for-the-badge)](https://zh.wikipedia.org/wiki/Linux)
+[![一键安装](https://img.shields.io/badge/一键安装-绿色-brightgreen?style=for-the-badge&logo=shell)](https://raw.githubusercontent.com/AMTOPA/Overleaf-Sharelatex-Easy-Install/main/install.sh)
+
+</div>
+
+---
+
+## ✨ 功能特性
+
+- 🚀 **单命令完成部署**
+- 📦 **预配置中文环境**
+- 🖥️ **交互式菜单系统**
+- 🛠️ **自动修复常见问题**
+- 🇨🇳 **完美支持中文文档**
+
+<div align="center">
+<img src="https://example.com/oversei-demo-zh.gif" width="800" alt="演示动画">
+</div>
+
+---
+
+## 🛠️ 安装指南
+
+### 1. 快速安装
+
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/AMTOPA/Overleaf-Sharelatex-Easy-Install/main/install.sh)
+
+### 2. 高级选项
+
+| 选项   | 命令                     | 说明                                |
+| ---- | ---------------------- | --------------------------------- |
+| 完整安装 | `install.sh --full`    | 基础服务+中文+字体                        |
+| 仅基础  | `install.sh --base`    | 最小化安装                             |
+| 中文包  | `install.sh --chinese` | 中文语言支持                            |
+| 字体管理 | `install.sh --fonts`   | 额外字体包 |

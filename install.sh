@@ -106,9 +106,8 @@ install_chinese() {
     docker exec sharelatex bash -c '
         tlmgr install collection-langchinese xecjk ctex
         mkdir -p /usr/share/fonts/chinese
-        wget -qO /tmp/simsun.ttc "https://github.com/Overleaf/overleaf-fonts/raw/main/simsun.ttc"
-        wget -qO /tmp/simkai.zip "https://github.com/Overleaf/overleaf-fonts/raw/main/simkai.zip"
-        unzip /tmp/simkai.zip -d /usr/share/fonts/chinese/
+        wget -O /usr/share/fonts/chinese/simsun.ttc "https://github.com/jiaxiaochu/font/raw/master/simsun.ttc"
+        wget -O /usr/share/fonts/chinese/simkai.ttf "https://github.com/jiaxiaochu/font/raw/master/simkai.ttf"
         fc-cache -fv
     ' && echo -e "${GREEN}✓ 中文支持已安装!${NC}" || {
         echo -e "${RED}✗ 中文支持安装失败!${NC}"

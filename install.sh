@@ -1,5 +1,5 @@
 #!/bin/bash
-# OVERSEI Installer v4.0
+# OVERSEI Installer v5.0
 # GitHub: https://github.com/AMTOPA/Overleaf-Sharelatex-Easy-Install
 
 # 发送 API 计数请求（静默模式，不影响脚本执行）
@@ -93,7 +93,7 @@ install_base() {
     sed -i \
         -e "s/^OVERLEAF_LISTEN_IP=.*/OVERLEAF_LISTEN_IP=${LISTEN_IP}/" \
         -e 's/^OVERLEAF_PORT=.*/OVERLEAF_PORT=8888/' \
-        -e 's/^MONGO_VERSION=.*/MONGO_VERSION=4.4/' \
+        -e 's/^MONGO_VERSION=.*/MONGO_VERSION=6.0/' \
         config/overleaf.rc
 
     echo -e "${GREEN}✓ 启动服务中...${NC}"
@@ -119,7 +119,7 @@ install_fonts() {
     PS3="请选择字体包: "
     options=(
         "Windows核心字体"
-        "Adobe全家桶" 
+        "Adobe字体" 
         "思源字体"
         "返回"
     )

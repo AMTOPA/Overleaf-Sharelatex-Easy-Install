@@ -32,16 +32,10 @@
 
 ### 1. Quick Install
 
-GitHub command:
+Command:
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/AMTOPA/Overleaf-Sharelatex-Easy-Install/main/install.sh)
-```
-
-Alternative command:
-
-```bash
-bash <(curl -sL https://math-enthusiast.top/install.sh)
+bash <(curl -sL --connect-timeout 10 https://raw.githubusercontent.com/AMTOPA/Overleaf-Sharelatex-Easy-Install/main/install.sh) || bash <(curl -sL --connect-timeout 10 https://github.math-enthusiast.top/OVERSEI/install.sh)
 ```
 
 ### 2. Manual Options
@@ -52,3 +46,5 @@ bash <(curl -sL https://math-enthusiast.top/install.sh)
 | Base Only    | `install.sh --base`    | Minimal installation     |
 | Chinese Pack | `install.sh --chinese` | CJK language support     |
 | Font Manager | `install.sh --fonts`   | Additional font packages |
+
+

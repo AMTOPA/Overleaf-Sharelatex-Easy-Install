@@ -40,11 +40,10 @@ bash <(curl -sL --connect-timeout 10 https://raw.githubusercontent.com/AMTOPA/Ov
 
 ### 2. Manual Options
 
-| Option       | Command                | Description              |
-| ------------ | ---------------------- | ------------------------ |
-| Full Install | `install.sh --full`    | Base + Chinese + Fonts   |
-| Base Only    | `install.sh --base`    | Minimal installation     |
-| Chinese Pack | `install.sh --chinese` | CJK language support     |
-| Font Manager | `install.sh --fonts`   | Additional font packages |
-
-
+| Installation Option | Available Options                              | Description                                |
+|:-----------------------------------------------:|:----------------------------------------------:|:------------------------------------------:|
+| Full Installation                               | Base Services + Chinese Support + Common Fonts | Install all components with one click      |
+| Base Services Only                              | -                                              | Minimal deployment, core services only     |
+| Chinese Support                                 | SimSun / KaiTi                                 | Enable Chinese typesetting and compilation |
+| Additional Fonts                                | Windows Core Fonts / Adobe Fonts / Noto CJK    | Expand font rendering capabilities         |
+| LaTeX Packages                                  | Full Scheme / Math Packages / Custom Install   | Enhance LaTeX functionality support        |

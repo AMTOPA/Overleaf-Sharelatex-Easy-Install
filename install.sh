@@ -1,5 +1,5 @@
 #!/bin/bash
-# OVERSEI Installer v5.2
+# OVERSEI Installer v5.3
 # GitHub: https://github.com/AMTOPA/Overleaf-Sharelatex-Easy-Install  
 
 # 发送 API 计数请求（静默模式，不影响脚本执行）
@@ -18,7 +18,7 @@ cat << "EOF"
  ╚═════╝   ╚═══╝  ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝
 EOF
 
-echo -e "${CYAN}:: OVERSEI - Overleaf/ShareLaTeX Easy Installer v5.2 ::${NC}\n"
+echo -e "${CYAN}:: OVERSEI - Overleaf/ShareLaTeX Easy Installer v5.3 ::${NC}\n"
 
 # Check root
 [ "$(id -u)" != "0" ] && echo -e "${RED}✗ 请使用root用户运行!${NC}" && exit 1
@@ -297,13 +297,25 @@ install_fonts() {
             1) 
                 echo -e "${YELLOW}▶ 安装Windows核心字体...${NC}"
                 docker exec sharelatex bash -c '
+                    # 更新包列表
                     apt-get update
+                    
+                    # 设置非交互式安装并接受EULA
+                    echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula boolean true" | debconf-set-selections
+                    
                     # 安装微软核心字体包
-                    apt-get install -y ttf-mscorefonts-installer
-                    # 同意EULA
-                    echo ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true | debconf-set-selections
-                    # 重新配置以触发字体安装
-                    dpkg-reconfigure ttf-mscorefonts-installer
+                    echo "正在安装ttf-mscorefonts-installer..."
+                    DEBIAN_FRONTEND=noninteractive apt-get install -y ttf-mscorefonts-installer
+                    
+                    # 检查字体文件是否存在
+                    echo "检查Times New Roman字体是否安装:"
+                    if [ -f "/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman.ttf" ] || \
+                       [ -f "/usr/share/fonts/truetype/msttcorefonts/times.ttf" ]; then
+                        echo "✓ Times New Roman字体已安装"
+                    else
+                        echo "✗ Times New Roman字体未安装，可能需要手动安装"
+                    fi
+                    
                     echo "Windows核心字体安装完成"
                 '
                 ;;
@@ -323,20 +335,52 @@ install_fonts() {
                     
                     # 下载Times New Roman字体
                     echo "下载Times New Roman字体..."
-                    wget -q --timeout=10 -O times.ttf "http://sourceforge.net/projects/corefonts/files/the%20fonts/final/times32.exe/download" || \
-                    wget -q --timeout=10 -O times.ttf "https://downloads.sourceforge.net/project/corefonts/the%20fonts/final/times32.exe" || \
-                    echo "下载失败，尝试从备用源下载"
+                    if ! command -v wget &> /dev/null; then
+                        apt-get update && apt-get install -y wget
+                    fi
+                    
+                    # 尝试从不同源下载
+                    if [ ! -f "times32.exe" ]; then
+                        wget -q --timeout=30 --tries=2 -O times32.exe \
+                            "https://downloads.sourceforge.net/project/corefonts/the%20fonts/final/times32.exe" || \
+                        wget -q --timeout=30 --tries=2 -O times32.exe \
+                            "http://sourceforge.net/projects/corefonts/files/the%20fonts/final/times32.exe/download" || \
+                        echo "下载失败，尝试其他方法"
+                    fi
                     
                     # 如果下载成功，提取字体
                     if [ -f "times32.exe" ]; then
-                        cabextract -L -F "*.ttf" times32.exe 2>/dev/null || \
-                        (echo "cabextract未安装，安装中..." && apt-get update && apt-get install -y cabextract && cabextract -L -F "*.ttf" times32.exe)
+                        echo "提取字体文件..."
+                        if ! command -v cabextract &> /dev/null; then
+                            echo "安装cabextract..."
+                            apt-get update && apt-get install -y cabextract
+                        fi
                         
-                        # 重命名字体文件
-                        mv times.ttf Times_New_Roman.ttf 2>/dev/null || true
-                        mv timesbd.ttf Times_New_Roman_Bold.ttf 2>/dev/null || true
-                        mv timesbi.ttf Times_New_Roman_Bold_Italic.ttf 2>/dev/null || true
-                        mv timesi.ttf Times_New_Roman_Italic.ttf 2>/dev/null || true
+                        if cabextract -L -F "*.ttf" times32.exe 2>/dev/null; then
+                            echo "字体提取成功"
+                            # 重命名字体文件
+                            for font in times*.ttf; do
+                                case "$font" in
+                                    "times.ttf")
+                                        mv "times.ttf" "Times_New_Roman.ttf" 2>/dev/null || true
+                                        ;;
+                                    "timesbd.ttf")
+                                        mv "timesbd.ttf" "Times_New_Roman_Bold.ttf" 2>/dev/null || true
+                                        ;;
+                                    "timesbi.ttf")
+                                        mv "timesbi.ttf" "Times_New_Roman_Bold_Italic.ttf" 2>/dev/null || true
+                                        ;;
+                                    "timesi.ttf")
+                                        mv "timesi.ttf" "Times_New_Roman_Italic.ttf" 2>/dev/null || true
+                                        ;;
+                                esac
+                            done
+                        else
+                            echo "字体提取失败"
+                        fi
+                    else
+                        echo "未能下载times32.exe文件"
+                        echo "您可以手动下载并安装字体"
                     fi
                     
                     # 刷新字体缓存

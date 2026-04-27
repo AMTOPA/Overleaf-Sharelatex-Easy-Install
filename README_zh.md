@@ -138,9 +138,12 @@ docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
 - 安装器仓库：当前项目。
 - Overleaf Toolkit 安装目录：`/root/overleaf/overleaf-toolkit`。
 - Toolkit 配置文件：`/root/overleaf/overleaf-toolkit/config/overleaf.rc`。
-- 默认访问地址：
+- 默认外部访问地址：
   - 本地部署：`http://localhost:8888`
   - 服务器部署：`http://<server-ip>:8888`
+- 首次管理员初始化地址：`http://<ip>:8888/launchpad`。
+- 初始化后的登录地址：`http://<ip>:8888/login`。
+- 基础服务安装成功后，脚本会自动输出公网 IP、宿主机 IP、`localhost`、`127.0.0.1`，以及可检测到的 Docker 容器内部 IP 候选地址。Docker 内部地址通常使用 `80` 端口，一般只适合宿主机或 Docker 网络内部访问。
 
 ---
 

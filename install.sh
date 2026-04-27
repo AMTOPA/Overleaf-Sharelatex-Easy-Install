@@ -90,6 +90,57 @@ prepare_tlmgr() {
     docker exec "$container" bash -c 'tlmgr update --self 2>/dev/null || true'
 }
 
+print_url_group() {
+    local host="$1"
+    local port="$2"
+    local base_url
+
+    [ -z "$host" ] && return 0
+    base_url="http://${host}:${port}"
+    echo -e "${CYAN}- ${base_url}${NC}"
+    echo -e "  管理员初始化: ${base_url}/launchpad"
+    echo -e "  登录地址:     ${base_url}/login"
+}
+
+show_access_urls() {
+    local sharelatex_container="$1"
+    local seen_hosts=" "
+    local seen_docker_hosts=" "
+    local host
+    local docker_ip
+    local printed_docker=0
+
+    echo -e "${GREEN}✓ 基础服务安装完成!${NC}"
+    echo -e "${BLUE}访问地址汇总:${NC}"
+    echo -e "${YELLOW}首次使用请先打开管理员初始化地址创建管理员账号，之后使用登录地址进入系统。${NC}"
+
+    for host in "${PUBLIC_IP:-}" $(hostname -I 2>/dev/null) localhost 127.0.0.1; do
+        [ -z "$host" ] && continue
+        case "$seen_hosts" in
+            *" $host "*) continue ;;
+        esac
+        seen_hosts="${seen_hosts}${host} "
+        print_url_group "$host" "8888"
+    done
+
+    {
+        docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{"\n"}}{{end}}' "$sharelatex_container" 2>/dev/null
+        docker exec "$sharelatex_container" hostname -I 2>/dev/null | tr ' ' '\n'
+        docker exec "$sharelatex_container" bash -c "ip -o -4 addr show scope global 2>/dev/null | awk '{split(\$4,a,\"/\"); print a[1]}'" 2>/dev/null
+    } | while IFS= read -r docker_ip; do
+        [ -z "$docker_ip" ] && continue
+        case "$seen_docker_hosts" in
+            *" $docker_ip "*) continue ;;
+        esac
+        seen_docker_hosts="${seen_docker_hosts}${docker_ip} "
+        if [ "$printed_docker" -eq 0 ]; then
+            echo -e "${YELLOW}Docker 内部地址（通常仅宿主机或 Docker 网络内可访问）:${NC}"
+            printed_docker=1
+        fi
+        print_url_group "$docker_ip" "80"
+    done
+}
+
 cat << "EOF"
  ██████╗ ██╗   ██╗███████╗██████╗ ███████╗███████╗██╗
 ██╔═══██╗██║   ██║██╔════╝██╔══██╗██╔════╝██╔════╝██║
@@ -317,7 +368,7 @@ install_base() {
     fi
     
     echo -e "${GREEN}✓ sharelatex 容器已启动${NC}"
-    echo -e "${GREEN}✓ 基础服务安装完成! 访问: ${ACCESS_URL}${NC}"
+    show_access_urls "$SHARELATEX_CONTAINER"
 }
 
 install_chinese() {

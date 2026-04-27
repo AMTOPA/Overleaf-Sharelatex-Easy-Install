@@ -138,9 +138,12 @@ docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
 - Installer repository: this project.
 - Overleaf Toolkit installation: `/root/overleaf/overleaf-toolkit`.
 - Toolkit config file: `/root/overleaf/overleaf-toolkit/config/overleaf.rc`.
-- Default access URL:
+- Default external access URL:
   - Local deployment: `http://localhost:8888`
   - Server deployment: `http://<server-ip>:8888`
+- First-time admin setup URL: `http://<ip>:8888/launchpad`.
+- Login URL after initialization: `http://<ip>:8888/login`.
+- After base service installation, the installer prints candidate URLs for the public IP, host IP addresses, `localhost`, `127.0.0.1`, and Docker internal container IP addresses when available. Docker internal URLs normally use port `80` and are usually reachable only from the host or Docker networks.
 
 ---
 

@@ -19,10 +19,11 @@
 - 🚀 **单命令部署**，基于官方 Overleaf Toolkit 部署 Overleaf Community Edition。
 - 🧩 **交互式菜单**，支持本地/服务器部署、MongoDB 版本、中文支持、字体和 LaTeX 宏包安装。
 - ✅ **MongoDB 8.0+ 兼容修复**，避免 MongoDB 6.x/7.x 导致 ShareLaTeX 启动 abort。
-- 🇨🇳 **中文排版支持**，安装 `ctex`、`xeCJK`、中文字体，并支持 XeLaTeX 编译。
+- 🇨🇳 **中文界面与中文排版支持**，设置 `OVERLEAF_SITE_LANGUAGE=zh-CN`，安装 `ctex`、`xeCJK`、中文字体、Windows 核心字体，并支持 XeLaTeX 编译。
 - 🪞 **TeX Live 镜像兼容处理**，当容器内 TeX Live 年份落后于当前 CTAN 源时，自动切换到清华历史归档 `tlnet-final`。
 - 🔤 **字体安装器**，支持 Windows 核心字体、Adobe 字体、思源/Noto CJK 字体，并自动处理 `fontconfig` 与 `fc-cache`。
-- 📦 **LaTeX 宏包安装器**，支持完整宏包、常用宏包和自定义 `tlmgr` 包名。
+- 📦 **LaTeX 宏包安装器**，支持完整宏包、常用论文模板宏包和自定义 `tlmgr` 包名，并包含 `collection-latexextra`、`multirow`/`bigstrut`、`cprotect` 以及 CUMCM 模板常见依赖。
+- 🧱 **可选自定义镜像持久化**，安装中文支持、字体或宏包后，可在确认模板能正常编译后再固化当前容器，避免容器重建后丢失 `ctex.sty` 等已安装文件。
 - 🛠️ **更可靠的诊断与错误处理**，包括容器检测、MongoDB 实际版本检查、启动日志输出和失败中止。
 
 ---
@@ -51,9 +52,9 @@ bash <(curl -sL --connect-timeout 10 https://raw.githubusercontent.com/AMTOPA/Ov
 |:--|:--|:--|
 | 完整安装 | 基础服务 + 中文支持 + 字体 + LaTeX 宏包 | 按顺序安装主要组件 |
 | 仅安装基础服务 | Overleaf + MongoDB + Redis | 基于 Overleaf Toolkit 的最小化部署 |
-| 安装中文支持包 | `collection-langchinese`、`xeCJK`、`ctex`、中文字体 | 启用中文文档编译能力 |
+| 安装中文支持包 | 中文网页界面、`collection-langchinese`、`xeCJK`、`ctex`、SimSun/SimKai、Windows 核心字体 | 启用中文界面、CUMCM 模板和中文文档编译能力 |
 | 安装额外字体包 | Windows 核心字体 / Adobe 字体 / 思源字体 / 手动 Times New Roman | 扩展 ShareLaTeX 容器内可用字体 |
-| 安装 LaTeX 宏包 | `scheme-full` / 常用宏包 / 自定义包列表 | 通过 `tlmgr` 安装宏包 |
+| 安装 LaTeX 宏包 | `scheme-full` / 常用论文模板宏包 / 自定义包列表 | 通过 `tlmgr` 安装宏包；常用模式包含 `collection-latexextra` |
 
 ---
 
@@ -88,6 +89,8 @@ https://mirrors.tuna.tsinghua.edu.cn/tex-historic-archive/systems/texlive/<year>
 
 这样可以保证安装的宏包与 Overleaf 容器内自带的 TeX Live 版本一致。
 
+安装中文支持、字体或 LaTeX 宏包后，OVERSEI 会询问是否把当前 `sharelatex` 容器固化为本地自定义镜像，并配置 Overleaf Toolkit 后续使用该镜像。建议先用自己的模板完成编译验证，确认无误后再固化。
+
 ---
 
 ## ✅ 已验证环境
@@ -99,7 +102,9 @@ https://mirrors.tuna.tsinghua.edu.cn/tex-historic-archive/systems/texlive/<year>
 - `redis:7.4`
 - Web 服务监听 `0.0.0.0:8888`
 - `ctex.sty` 与 `xeCJK.sty`
-- `algorithmicx.sty` 与 `algorithm.sty`
+- `algorithmicx.sty`、`algorithm.sty`、`multirow.sty` 与 `bigstrut.sty`
+- `cprotect.sty` 与 `suffix.sty`
+- `Times New Roman`、`Arial`、`SimSun` 与 `simkai.ttf`
 - Noto CJK 字体
 - 最小中文 + 算法宏包 XeLaTeX 文档编译通过
 
@@ -120,6 +125,14 @@ grep '^MONGO_VERSION=' /root/overleaf/overleaf-toolkit/config/overleaf.rc
 ### `tlmgr` 提示本地 TeX Live 旧于远程源
 
 重新运行中文支持或宏包安装选项。OVERSEI 会自动识别 TeX Live 年份，并配置兼容的历史归档源。
+
+### 缺少 `ctex.sty`、`cprotect.sty`、`suffix.sty` 或其他 `.sty` 文件
+
+中文支持只安装 `ctex`、`xeCJK` 等中文排版包，不等于完整 TeX Live。CUMCM 等论文模板建议使用“常用论文模板宏包”模式，该模式会安装 `collection-latexextra` 和常见模板依赖。只有在确实需要最完整 TeX Live，且能接受更大的磁盘占用和 IO 压力时，才建议选择 `scheme-full`。
+
+### 出现大量 `fontspec` 或 `Missing character ... nullfont` 错误
+
+CUMCM 等模板常会强制使用 `Times New Roman`、`Arial`、`SimSun` 和精确文件名 `simkai.ttf`。重新运行中文支持安装选项即可。OVERSEI 会安装 Microsoft core fonts，下载 SimSun/SimKai，刷新 `fc-cache`，并通过 `mktexlsr` 把 `simkai.ttf` 加入 TeX Live 本地字体树。
 
 ### 字体安装后无法识别
 

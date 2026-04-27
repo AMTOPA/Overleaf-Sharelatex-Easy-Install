@@ -19,10 +19,11 @@
 - 🚀 **One-command deployment** for Overleaf Community Edition through the official Overleaf Toolkit.
 - 🧩 **Interactive menu system** for local/server deployment, MongoDB version, fonts, Chinese support, and LaTeX packages.
 - ✅ **MongoDB 8.0+ compatibility** to avoid the ShareLaTeX abort caused by MongoDB 6.x/7.x.
-- 🇨🇳 **Chinese typesetting support** with `ctex`, `xeCJK`, Chinese fonts, and XeLaTeX-ready configuration.
+- 🇨🇳 **Chinese UI and typesetting support** with `OVERLEAF_SITE_LANGUAGE=zh-CN`, `ctex`, `xeCJK`, Chinese fonts, Windows core fonts, and XeLaTeX-ready configuration.
 - 🪞 **TeX Live repository compatibility** with automatic fallback to the TUNA historic `tlnet-final` mirror when the container TeX Live year is older than the current CTAN repository.
 - 🔤 **Font installers** for Windows core fonts, Adobe fonts, and Noto CJK fonts, including `fontconfig`/`fc-cache` handling.
-- 📦 **LaTeX package installer** for full scheme, common packages, or custom `tlmgr` package names.
+- 📦 **LaTeX package installer** for full scheme, common thesis-template packages, or custom `tlmgr` package names, including `collection-latexextra`, `multirow`/`bigstrut`, `cprotect`, and common CUMCM-style dependencies.
+- 🧱 **Optional custom image persistence** after installing Chinese support, fonts, or packages, preventing container recreation from losing `ctex.sty` or other installed files after you confirm your templates compile correctly.
 - 🛠️ **Safer diagnostics** with container detection, MongoDB version checks, startup log output, and failure propagation.
 
 ---
@@ -51,9 +52,9 @@ bash <(curl -sL --connect-timeout 10 https://raw.githubusercontent.com/AMTOPA/Ov
 |:--|:--|:--|
 | Full Installation | Base Services + Chinese Support + Fonts + LaTeX Packages | Install all major components in sequence |
 | Base Services Only | Overleaf + MongoDB + Redis | Minimal deployment using Overleaf Toolkit |
-| Chinese Support | `collection-langchinese`, `xeCJK`, `ctex`, Chinese fonts | Enable Chinese document compilation |
+| Chinese Support | Chinese web UI, `collection-langchinese`, `xeCJK`, `ctex`, SimSun/SimKai, Windows core fonts | Enable Chinese UI, CUMCM-style templates, and document compilation |
 | Additional Fonts | Windows Core Fonts / Adobe Fonts / Noto CJK / Manual Times New Roman | Expand available fonts in the ShareLaTeX container |
-| LaTeX Packages | `scheme-full` / common packages / custom package list | Install packages through `tlmgr` |
+| LaTeX Packages | `scheme-full` / common thesis-template packages / custom package list | Install packages through `tlmgr`; the common mode includes `collection-latexextra` |
 
 ---
 
@@ -88,6 +89,8 @@ https://mirrors.tuna.tsinghua.edu.cn/tex-historic-archive/systems/texlive/<year>
 
 This keeps package installation compatible with the TeX Live version bundled in the Overleaf container.
 
+After Chinese support, fonts, or LaTeX packages are installed, OVERSEI asks whether to commit the current `sharelatex` container to a local custom image and configure Overleaf Toolkit to use it. It is recommended to compile and verify your own templates first, then persist the image after everything works.
+
 ---
 
 ## ✅ Validated Setup
@@ -99,7 +102,9 @@ The current installer has been tested with:
 - `redis:7.4`
 - Web service exposed on `0.0.0.0:8888`
 - `ctex.sty` and `xeCJK.sty`
-- `algorithmicx.sty` and `algorithm.sty`
+- `algorithmicx.sty`, `algorithm.sty`, `multirow.sty`, and `bigstrut.sty`
+- `cprotect.sty` and `suffix.sty`
+- `Times New Roman`, `Arial`, `SimSun`, and `simkai.ttf`
 - Noto CJK fonts
 - A minimal XeLaTeX document using Chinese text and algorithm packages
 
@@ -120,6 +125,14 @@ It must be `8.0` or newer.
 ### `tlmgr` says the local TeX Live is older than the remote repository
 
 Run the Chinese support or package installer again. OVERSEI will detect the TeX Live year and configure a compatible historic repository automatically.
+
+### `ctex.sty`, `cprotect.sty`, `suffix.sty`, or other `.sty` files are missing
+
+Chinese support only installs Chinese typesetting packages such as `ctex` and `xeCJK`. For thesis templates such as CUMCM, use the common thesis-template package mode, which installs `collection-latexextra` and common template dependencies. Use `scheme-full` only when you need the most complete TeX Live installation and can accept the larger disk and IO cost.
+
+### Many `fontspec` or `Missing character ... nullfont` errors appear
+
+CUMCM-style templates often require Windows font names such as `Times New Roman`, `Arial`, `SimSun`, and the exact file name `simkai.ttf`. Run the Chinese support installer again. OVERSEI installs Microsoft core fonts, downloads SimSun/SimKai, refreshes `fc-cache`, and adds `simkai.ttf` to the TeX Live local font tree with `mktexlsr`.
 
 ### Fonts are installed but not detected
 

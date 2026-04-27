@@ -141,6 +141,101 @@ show_access_urls() {
     done
 }
 
+configure_chinese_ui() {
+    local variables_file="$TOOLKIT_DIR/config/variables.env"
+
+    if [ ! -d "$TOOLKIT_DIR/config" ]; then
+        echo -e "${YELLOW}⚠ 未找到 Overleaf Toolkit 配置目录，跳过网页中文界面配置${NC}"
+        return 0
+    fi
+
+    touch "$variables_file" || {
+        echo -e "${RED}✗ 无法写入 $variables_file，网页中文界面配置失败${NC}"
+        return 1
+    }
+    set_rc_value "OVERLEAF_SITE_LANGUAGE" "zh-CN" "$variables_file"
+    echo -e "${GREEN}✓ Overleaf 网页界面默认语言已设置为简体中文${NC}"
+}
+
+persist_sharelatex_image() {
+    local container="$1"
+    local image_name="oversei/sharelatex"
+    local image_version="latest"
+    local image_tag
+
+    if [ -f "$TOOLKIT_DIR/config/version" ]; then
+        image_version=$(head -1 "$TOOLKIT_DIR/config/version" | tr -d '[:space:]')
+        [ -z "$image_version" ] && image_version="latest"
+    fi
+    image_tag="${image_name}:${image_version}"
+
+    echo -e "${YELLOW}▶ 正在固化当前 sharelatex 容器为自定义镜像，避免重建后丢失中文/宏包/字体...${NC}"
+    docker commit "$container" "$image_tag" >/dev/null || {
+        echo -e "${RED}✗ 自定义镜像固化失败${NC}"
+        return 1
+    }
+
+    if [ -f "$TOOLKIT_DIR/config/overleaf.rc" ]; then
+        set_rc_value "OVERLEAF_IMAGE_NAME" "$image_name" "$TOOLKIT_DIR/config/overleaf.rc"
+    fi
+
+    echo -e "${GREEN}✓ 已固化自定义镜像: ${image_tag}${NC}"
+    echo -e "${GREEN}✓ 后续 Overleaf Toolkit 将使用: ${image_tag}${NC}"
+}
+
+offer_persist_sharelatex_image() {
+    local container="$1"
+
+    echo -e "${YELLOW}是否将当前 sharelatex 容器固化为自定义镜像？${NC}"
+    echo -e "${YELLOW}建议在确认中文、字体和你的模板都能正常编译后再固化。${NC}"
+    select choice in "暂不固化，继续测试" "固化并重建容器"; do
+        case $REPLY in
+            1)
+                echo -e "${YELLOW}→ 已跳过固化；后续容器重建可能丢失本次安装的宏包/字体${NC}"
+                break
+                ;;
+            2)
+                persist_sharelatex_image "$container" || return 1
+                recreate_sharelatex_container || return 1
+                break
+                ;;
+            *) echo -e "${RED}无效选择!${NC}" ;;
+        esac
+    done
+}
+
+recreate_sharelatex_container() {
+    if [ ! -d "$TOOLKIT_DIR" ]; then
+        return 0
+    fi
+
+    echo -e "${YELLOW}▶ 正在重建 sharelatex 容器以应用中文界面/自定义镜像配置...${NC}"
+    (
+        cd "$TOOLKIT_DIR" || exit 1
+        if [ -x "bin/docker-compose" ]; then
+            bin/docker-compose rm -f -s sharelatex >/dev/null 2>&1 || true
+        elif docker compose version &>/dev/null; then
+            docker compose rm -f -s sharelatex >/dev/null 2>&1 || true
+        elif command -v docker-compose &>/dev/null; then
+            docker-compose rm -f -s sharelatex >/dev/null 2>&1 || true
+        fi
+
+        if [ -x "bin/docker-compose" ]; then
+            bin/docker-compose up -d sharelatex
+        elif docker compose version &>/dev/null; then
+            docker compose up -d sharelatex
+        elif command -v docker-compose &>/dev/null; then
+            docker-compose up -d sharelatex
+        else
+            exit 1
+        fi
+    ) || {
+        echo -e "${RED}✗ sharelatex 容器重建失败${NC}"
+        show_compose_logs "sharelatex"
+        return 1
+    }
+}
+
 cat << "EOF"
  ██████╗ ██╗   ██╗███████╗██████╗ ███████╗███████╗██╗
 ██╔═══██╗██║   ██║██╔════╝██╔══██╗██╔════╝██╔════╝██║
@@ -230,9 +325,9 @@ TOOLKIT_DIR="$INSTALL_DIR/overleaf-toolkit"
 show_menu() {
     echo -e "${BLUE}选择安装选项:${NC}"
     options=(
-        "完整安装 (基础服务+中文支持+常用字体+宏包)"
+        "完整安装 (基础服务+中文界面/中文支持+常用字体+宏包)"
         "仅安装基础服务"
-        "安装中文支持包"
+        "安装中文界面/中文支持包"
         "安装额外字体包"
         "安装LaTeX宏包"
         "退出"
@@ -303,6 +398,8 @@ install_base() {
     set_rc_value "OVERLEAF_LISTEN_IP" "$LISTEN_IP" "config/overleaf.rc"
     set_rc_value "OVERLEAF_PORT" "8888" "config/overleaf.rc"
     set_rc_value "MONGO_VERSION" "$MONGO_VERSION" "config/overleaf.rc"
+    set_rc_value "SIBLING_CONTAINERS_ENABLED" "false" "config/overleaf.rc"
+    configure_chinese_ui || return 1
 
     echo -e "${YELLOW}▶ 启动服务中...${NC}"
     
@@ -381,6 +478,7 @@ install_chinese() {
         echo -e "${RED}✗ sharelatex 容器未运行!${NC}"
         return 1
     fi
+    configure_chinese_ui || return 1
 
     # 先更新tlmgr自身
     echo -e "${YELLOW}▶ 更新 tlmgr...${NC}"
@@ -396,6 +494,14 @@ install_chinese() {
     docker exec "$SHARELATEX_CONTAINER" bash -c '
         check_status=0
         
+        command -v fc-cache >/dev/null || (apt-get update && apt-get install -y fontconfig)
+        if ! fc-match "Times New Roman" | grep -qi "Times New Roman" || ! fc-match "Arial" | grep -qi "Arial"; then
+            export DEBIAN_FRONTEND=noninteractive
+            echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
+            apt-get update
+            apt-get install -y fontconfig cabextract xfonts-utils ttf-mscorefonts-installer
+        fi
+
         # 安装中文支持包
         echo "正在安装中文宏包..."
         tlmgr install collection-langchinese xecjk ctex
@@ -422,6 +528,11 @@ install_chinese() {
             echo "下载simkai.ttf失败，将使用备用方案"
         fi
         
+        mkdir -p /usr/local/texlive/texmf-local/fonts/truetype/oversei
+        [ -s "/usr/share/fonts/chinese/simsun.ttc" ] && cp -f /usr/share/fonts/chinese/simsun.ttc /usr/local/texlive/texmf-local/fonts/truetype/oversei/simsun.ttc
+        [ -s "/usr/share/fonts/chinese/simkai.ttf" ] && cp -f /usr/share/fonts/chinese/simkai.ttf /usr/local/texlive/texmf-local/fonts/truetype/oversei/simkai.ttf
+        mktexlsr >/dev/null 2>&1 || true
+
         # 刷新字体缓存
         echo "正在刷新字体缓存..."
         fc-cache -fv 2>/dev/null || true
@@ -430,11 +541,16 @@ install_chinese() {
         echo "检查安装结果:"
         kpsewhich ctex.sty >/dev/null && echo "✓ ctex 已安装" || { echo "✗ ctex 未安装"; check_status=1; }
         kpsewhich xeCJK.sty >/dev/null && echo "✓ xeCJK 已安装" || { echo "✗ xeCJK 未安装"; check_status=1; }
+        fc-match "Times New Roman" | grep -qi "Times New Roman" && echo "✓ Times New Roman 已安装" || { echo "✗ Times New Roman 未安装"; check_status=1; }
+        fc-match "Arial" | grep -qi "Arial" && echo "✓ Arial 已安装" || { echo "✗ Arial 未安装"; check_status=1; }
+        fc-match "SimSun" | grep -qi "SimSun" && echo "✓ SimSun 已安装" || { echo "✗ SimSun 未安装"; check_status=1; }
+        kpsewhich simkai.ttf >/dev/null && echo "✓ simkai.ttf 已加入 TeX Live 字体树" || { echo "✗ simkai.ttf 未加入 TeX Live 字体树"; check_status=1; }
         [ "$install_status" -eq 0 ] && [ "$check_status" -eq 0 ]
     '
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✓ 中文支持已安装完成!${NC}"
+        offer_persist_sharelatex_image "$SHARELATEX_CONTAINER" || return 1
     else
         echo -e "${RED}✗ 中文支持安装失败，请检查 tlmgr 输出${NC}"
         return 1
@@ -563,6 +679,7 @@ install_fonts() {
             return 1
         }
         echo -e "${GREEN}✓ 字体缓存已刷新${NC}"
+        offer_persist_sharelatex_image "$SHARELATEX_CONTAINER" || return 1
         break
     done
 }
@@ -602,12 +719,13 @@ install_packages() {
 
     # Choose package type
     echo -e "${BLUE}选择宏包安装模式:${NC}"
-    select pkg_type in "全部宏包 (scheme-full, 约 4GB+)" "常用数学宏包 (amsmath, geometry 等)" "自定义宏包 (手动输入名称)"; do
+    select pkg_type in "全部宏包 (scheme-full, 约 4GB+)" "常用论文模板宏包 (含 collection-latexextra/CUMCM 依赖)" "自定义宏包 (手动输入名称)"; do
         case $REPLY in
             1)
                 echo -e "${YELLOW}▶ 开始安装 scheme-full (可能耗时较长，请耐心等待)...${NC}"
                 docker exec "$SHARELATEX_CONTAINER" tlmgr install scheme-full && {
                     echo -e "${GREEN}✓ 全部宏包安装完成!${NC}"
+                    offer_persist_sharelatex_image "$SHARELATEX_CONTAINER" || return 1
                 } || {
                     echo -e "${RED}✗ 全部宏包安装失败，请检查 tlmgr 输出${NC}"
                     return 1
@@ -615,16 +733,19 @@ install_packages() {
                 break
                 ;;
             2)
-                # 推荐数学与常用宏包
+                # 推荐论文模板与常用宏包
                 COMMON_PKGS="
+                collection-latexextra
                 amsmath amsfonts mathtools tools physics graphics
                 geometry fancyhdr enumitem titlesec hyperref
                 booktabs caption float listings algorithms algorithmicx
-                xcolor soul tikz-cd mhchem wrapfig
+                xcolor soul tikz-cd mhchem wrapfig multirow
+                abstract natbib gbt7714 lastpage tocloft fancyvrb cprotect
                 "
-                echo -e "${YELLOW}▶ 正在安装常用数学及排版宏包...${NC}"
+                echo -e "${YELLOW}▶ 正在安装常用论文模板及排版宏包...${NC}"
                 docker exec "$SHARELATEX_CONTAINER" tlmgr install $COMMON_PKGS && {
                     echo -e "${GREEN}✓ 常用宏包安装完成!${NC}"
+                    offer_persist_sharelatex_image "$SHARELATEX_CONTAINER" || return 1
                 } || {
                     echo -e "${RED}✗ 常用宏包安装失败，请检查 tlmgr 输出${NC}"
                     return 1
@@ -639,6 +760,7 @@ install_packages() {
                 echo -e "${YELLOW}▶ 正在安装自定义宏包: $CUSTOM_PKGS${NC}"
                 docker exec "$SHARELATEX_CONTAINER" tlmgr install $CUSTOM_PKGS && {
                     echo -e "${GREEN}✓ 自定义宏包安装完成: $CUSTOM_PKGS${NC}"
+                    offer_persist_sharelatex_image "$SHARELATEX_CONTAINER" || return 1
                 } || {
                     echo -e "${RED}✗ 自定义宏包安装失败，请检查宏包名称是否正确${NC}"
                     return 1

@@ -17,7 +17,7 @@
 ## ✨ Features
 
 - 🚀 **One-command deployment** for Overleaf Community Edition through the official Overleaf Toolkit.
-- 🧩 **Interactive menu system** for local/server deployment, MongoDB version, fonts, Chinese support, and LaTeX packages.
+- 🧩 **Recommended default flow**: choose local/server deployment, then OVERSEI automatically selects the latest compatible MongoDB version and runs the recommended full install by default.
 - ✅ **MongoDB 8.0+ compatibility** to avoid the ShareLaTeX abort caused by MongoDB 6.x/7.x.
 - 🧩 **ARM64/aarch64 server compatibility** by configuring ShareLaTeX to run as `linux/amd64` with QEMU/binfmt support on ARM hosts.
 - 🇨🇳 **Chinese UI and typesetting support** with `OVERLEAF_SITE_LANGUAGE=zh-CN`, `ctex`, `xeCJK`, Chinese fonts, Windows core fonts, and XeLaTeX-ready configuration.
@@ -25,7 +25,7 @@
 - 🔤 **Font installers** for Windows core fonts, Adobe fonts, and Noto CJK fonts, including `fontconfig`/`fc-cache` handling.
 - 📦 **LaTeX package installer** for full scheme, common thesis-template packages, or custom `tlmgr` package names, including `collection-latexextra`, `multirow`/`bigstrut`, `cprotect`, and common CUMCM-style dependencies.
 - 🧱 **Optional custom image persistence** after installing Chinese support, fonts, or packages, preventing container recreation from losing `ctex.sty` or other installed files after you confirm your templates compile correctly.
-- 🛠️ **Safer diagnostics** with container detection, MongoDB version checks, startup log output, and failure propagation.
+- 🛠️ **Automatic repair mode** for existing `overleaf-toolkit` checkouts, partial `config` directories, MongoDB version settings, ARM64 overrides, and service startup issues.
 
 ---
 
@@ -52,11 +52,12 @@ bash <(curl -sL --connect-timeout 10 https://raw.githubusercontent.com/AMTOPA/Ov
 
 | Installation Option | Available Options | Description |
 |:--|:--|:--|
-| Full Installation | Base Services + Chinese Support + Fonts + LaTeX Packages | Install all major components in sequence |
+| Recommended Full Installation (default) | Base Services + Chinese Support + Recommended Fonts + Common LaTeX Packages | Default option; applies recommended choices without asking for MongoDB, font, or package mode again |
 | Base Services Only | Overleaf + MongoDB + Redis | Minimal deployment using Overleaf Toolkit |
 | Chinese Support | Chinese web UI, `collection-langchinese`, `xeCJK`, `ctex`, SimSun/SimKai, Windows core fonts | Enable Chinese UI, CUMCM-style templates, and document compilation |
 | Additional Fonts | Windows Core Fonts / Adobe Fonts / Noto CJK / Manual Times New Roman | Expand available fonts in the ShareLaTeX container |
 | LaTeX Packages | `scheme-full` / common thesis-template packages / custom package list | Install packages through `tlmgr`; the common mode includes `collection-latexextra` |
+| Automatic Repair | Existing toolkit/config/container setup | Use this after interrupted installs, partial installs, or repeated runs that hit toolkit initialization errors |
 
 ---
 
@@ -67,7 +68,8 @@ Recent Overleaf Community Edition images require **MongoDB 8.0 or newer**. Older
 OVERSEI now:
 
 - Defaults to MongoDB `8.0+`.
-- Rejects custom MongoDB versions below `8.0`.
+- Automatically fetches the latest compatible MongoDB tag after the deployment type is selected, falling back to a safe default if Docker Hub is unavailable.
+- If `OVERSEI_MONGO_VERSION` is set, rejects values below `8.0` and falls back to automatic selection.
 - Writes `MONGO_VERSION` reliably to `config/overleaf.rc`.
 - Checks the actual running MongoDB version after startup.
 - Stops the installation and prints logs if MongoDB or ShareLaTeX fails.
@@ -88,7 +90,7 @@ On ARM64 hosts, OVERSEI now:
 - Writes `sharelatex.platform=linux/amd64` to `config/docker-compose.override.yml`.
 - Keeps MongoDB and Redis on native ARM64 images; only ShareLaTeX uses amd64 compatibility mode.
 
-If an older installer already failed, rerun the install command. You can also delete `/root/overleaf/overleaf-toolkit/config/docker-compose.override.yml` before rerunning if you want the installer to regenerate the override file.
+If an older installer already failed, rerun the install command and choose automatic repair. The installer will regenerate or repair the compatibility configuration.
 
 ---
 
@@ -144,7 +146,7 @@ It must be `8.0` or newer.
 
 ### ARM64 servers report `no matching manifest for linux/arm64/v8`
 
-Rerun the install command with v5.4 or newer. The installer generates:
+Rerun the install command with v5.5 or newer. The installer generates:
 
 ```yaml
 services:
@@ -157,6 +159,10 @@ and installs the amd64 container compatibility dependencies.
 ### `tlmgr` says the local TeX Live is older than the remote repository
 
 Run the Chinese support or package installer again. OVERSEI will detect the TeX Live year and configure a compatible historic repository automatically.
+
+### Re-running reports `ERROR: Config files already exist, exiting`
+
+This is Overleaf Toolkit refusing to run `bin/init` when a `config` directory already exists. Since v5.5, OVERSEI detects an existing `config/overleaf.rc` and skips `bin/init`; if `config` is incomplete, it is backed up to `config.bak.<timestamp>` before reinitialization. Rerun the installer and choose automatic repair.
 
 ### `ctex.sty`, `cprotect.sty`, `suffix.sty`, or other `.sty` files are missing
 

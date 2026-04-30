@@ -1,5 +1,5 @@
 #!/bin/bash
-# OVERSEI Installer v5.4
+# OVERSEI Installer v5.5
 # GitHub: https://github.com/AMTOPA/Overleaf-Sharelatex-Easy-Install  
 
 # 发送 API 计数请求（静默模式，不影响脚本执行）
@@ -10,6 +10,9 @@ RED='\033[1;31m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'
 BLUE='\033[1;34m'; CYAN='\033[1;36m'; NC='\033[0m'
 MIN_MONGO_VERSION="8.0"
 DEFAULT_MONGO_VERSION="8.0"
+INSTALL_DIR="/root/overleaf"
+TOOLKIT_DIR="$INSTALL_DIR/overleaf-toolkit"
+AUTO_MODE="${AUTO_MODE:-0}"
 
 version_lt() {
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$1" ]
@@ -47,6 +50,119 @@ set_rc_value() {
     else
         printf '%s=%s\n' "$key" "$value" >> "$file"
     fi
+}
+
+select_latest_mongo_version() {
+    local latest_tag
+
+    if [ -n "${OVERSEI_MONGO_VERSION:-}" ]; then
+        if [[ "$OVERSEI_MONGO_VERSION" =~ ^[0-9]+\.[0-9]+$ ]] && ! version_lt "$OVERSEI_MONGO_VERSION" "$MIN_MONGO_VERSION"; then
+            MONGO_VERSION="$OVERSEI_MONGO_VERSION"
+            echo -e "${GREEN}✓ 使用环境变量指定的 MongoDB 版本: ${MONGO_VERSION}${NC}"
+            return 0
+        fi
+        echo -e "${YELLOW}⚠ OVERSEI_MONGO_VERSION 无效或低于 ${MIN_MONGO_VERSION}，改用自动选择${NC}"
+    fi
+
+    echo -e "${YELLOW}▶ 正在自动选择 MongoDB 最新兼容版本...${NC}"
+    latest_tag="$DEFAULT_MONGO_VERSION"
+    if command -v curl &>/dev/null; then
+        latest_tag=$(get_latest_mongo_version) || latest_tag="$DEFAULT_MONGO_VERSION"
+    fi
+    [ -z "$latest_tag" ] && latest_tag="$DEFAULT_MONGO_VERSION"
+    MONGO_VERSION="$latest_tag"
+    echo -e "${GREEN}✓ 将使用 MongoDB ${MONGO_VERSION}${NC}"
+}
+
+choose_deployment_type() {
+    local choice
+
+    echo -e "${BLUE}选择部署类型:${NC}"
+    echo "1) 本地部署"
+    echo "2) 服务器部署（默认）"
+    read -r -p "#? " choice
+    choice="${choice:-2}"
+
+    case "$choice" in
+        1)
+            ACCESS_URL="http://localhost:8888"
+            LISTEN_IP="127.0.0.1"
+            ;;
+        2)
+            PUBLIC_IP=$(curl -s ifconfig.me)
+            ACCESS_URL="http://${PUBLIC_IP}:8888"
+            LISTEN_IP="0.0.0.0"
+            ;;
+        *)
+            echo -e "${YELLOW}⚠ 无效选项，使用默认服务器部署${NC}"
+            PUBLIC_IP=$(curl -s ifconfig.me)
+            ACCESS_URL="http://${PUBLIC_IP}:8888"
+            LISTEN_IP="0.0.0.0"
+            ;;
+    esac
+}
+
+ensure_dependencies() {
+    local cmd
+
+    for cmd in docker git unzip curl bc; do
+        if ! command -v "$cmd" &>/dev/null; then
+            echo -e "${YELLOW}▶ 安装依赖: $cmd...${NC}"
+            apt-get update && apt-get install -y "$cmd" || {
+                echo -e "${RED}✗ 安装 $cmd 失败!${NC}"
+                return 1
+            }
+        fi
+    done
+
+    if ! docker compose version &>/dev/null && ! command -v docker-compose &>/dev/null; then
+        echo -e "${YELLOW}▶ 安装依赖: docker compose...${NC}"
+        apt-get update && (apt-get install -y docker-compose-plugin || apt-get install -y docker-compose) || {
+            echo -e "${RED}✗ 安装 docker compose 失败!${NC}"
+            return 1
+        }
+    fi
+}
+
+ensure_toolkit_checkout() {
+    mkdir -p "$INSTALL_DIR" && cd "$INSTALL_DIR" || return 1
+    if [ ! -d "$TOOLKIT_DIR" ]; then
+        git clone https://github.com/overleaf/toolkit.git overleaf-toolkit || {
+            echo -e "${RED}✗ 克隆失败!${NC}"
+            return 1
+        }
+    else
+        echo -e "${GREEN}✓ 已存在 overleaf-toolkit，跳过克隆${NC}"
+    fi
+    cd "$TOOLKIT_DIR" || return 1
+}
+
+ensure_toolkit_initialized() {
+    local backup_dir
+
+    if [ -f "config/overleaf.rc" ]; then
+        echo -e "${GREEN}✓ 已检测到 Overleaf Toolkit 配置，跳过初始化${NC}"
+        touch "config/variables.env" 2>/dev/null || true
+        return 0
+    fi
+
+    if [ -d "config" ]; then
+        backup_dir="config.bak.$(date +%Y%m%d%H%M%S)"
+        echo -e "${YELLOW}⚠ 检测到不完整的 config 目录，备份为 ${backup_dir} 后重新初始化${NC}"
+        mv "config" "$backup_dir" || {
+            echo -e "${RED}✗ 备份残缺 config 目录失败${NC}"
+            return 1
+        }
+    fi
+
+    bin/init || {
+        if [ -f "config/overleaf.rc" ]; then
+            echo -e "${YELLOW}⚠ 初始化命令返回失败，但配置文件已存在，继续修复配置${NC}"
+            return 0
+        fi
+        echo -e "${RED}✗ overleaf-toolkit 初始化失败!${NC}"
+        return 1
+    }
 }
 
 ensure_amd64_emulation() {
@@ -377,105 +493,43 @@ cat << "EOF"
  ╚═════╝   ╚═══╝  ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝
 EOF
 
-echo -e "${CYAN}:: OVERSEI - Overleaf/ShareLaTeX Easy Installer v5.4 ::${NC}\n"
+echo -e "${CYAN}:: OVERSEI - Overleaf/ShareLaTeX Easy Installer v5.5 ::${NC}\n"
 
 # Check root
 [ "$(id -u)" != "0" ] && echo -e "${RED}✗ 请使用root用户运行!${NC}" && exit 1
 
-# Ask for deployment type
-echo -e "${BLUE}选择部署类型:${NC}"
-select deployment in "本地部署" "服务器部署"; do
-    case $deployment in
-        "本地部署") 
-            ACCESS_URL="http://localhost:8888"
-            LISTEN_IP="127.0.0.1"
-            break ;;
-        "服务器部署") 
-            PUBLIC_IP=$(curl -s ifconfig.me)
-            ACCESS_URL="http://${PUBLIC_IP}:8888"
-            LISTEN_IP="0.0.0.0"
-            break ;;
-        *) echo -e "${RED}无效选项!${NC}" ;;
-    esac
-done
-
-# MongoDB版本选择
-echo -e "${BLUE}选择MongoDB版本:${NC}"
-echo -e "${YELLOW}注意: Overleaf社区版要求使用${MIN_MONGO_VERSION}+版本${NC}"
-select mongo_ver in "最新版 (自动获取Docker Hub最新${MIN_MONGO_VERSION}+稳定版)" "自定义版本 (手动输入版本号)"; do
-    case $REPLY in
-        1)
-            # 尝试获取最新稳定版
-            echo -e "${YELLOW}▶ 正在获取MongoDB最新版本...${NC}"
-            
-            # 尝试多种方法获取最新版本
-            LATEST_MONGO="$DEFAULT_MONGO_VERSION"  # 默认值
-            
-            # 方法1: 从Docker Hub API获取
-            if command -v curl &>/dev/null; then
-                LATEST_TAG=$(get_latest_mongo_version) || LATEST_TAG=""
-                
-                if [[ -n "$LATEST_TAG" ]]; then
-                    LATEST_MONGO="$LATEST_TAG"
-                else
-                    # 方法2: 使用简单方法
-                    LATEST_MONGO="$DEFAULT_MONGO_VERSION"
-                fi
-            fi
-            
-            MONGO_VERSION="$LATEST_MONGO"
-            echo -e "${GREEN}✓ 将安装 MongoDB 最新版本: ${MONGO_VERSION}${NC}"
-            break
-            ;;
-        2)
-            while true; do
-                read -r -p "请输入MongoDB版本号 (如: 8.0, 8.2): " CUSTOM_VER
-                if [[ "$CUSTOM_VER" =~ ^[0-9]+\.[0-9]+$ ]]; then
-                    # 版本警告
-                    if version_lt "$CUSTOM_VER" "$MIN_MONGO_VERSION"; then
-                        echo -e "${RED}✗ Overleaf 当前版本要求 MongoDB ${MIN_MONGO_VERSION}+，请重新输入${NC}"
-                        continue
-                    fi
-                    MONGO_VERSION="$CUSTOM_VER"
-                    echo -e "${GREEN}✓ 已选择自定义版本: MongoDB ${MONGO_VERSION}${NC}"
-                    break
-                else
-                    echo -e "${RED}✗ 版本号格式错误! 请使用格式: X.X (如: 8.0)${NC}"
-                fi
-            done
-            break
-            ;;
-        *) echo -e "${RED}无效选项!${NC}" ;;
-    esac
-done
-
-# Paths
-INSTALL_DIR="/root/overleaf"
-TOOLKIT_DIR="$INSTALL_DIR/overleaf-toolkit"
+choose_deployment_type
+select_latest_mongo_version
 
 # Main Menu
 show_menu() {
+    local choice
+
     echo -e "${BLUE}选择安装选项:${NC}"
     options=(
-        "完整安装 (基础服务+中文界面/中文支持+常用字体+宏包)"
+        "推荐完整安装（默认：基础服务+中文支持+常用字体+常用宏包）"
         "仅安装基础服务"
         "安装中文界面/中文支持包"
         "安装额外字体包"
         "安装LaTeX宏包"
+        "自动检测并修复现有安装"
         "退出"
     )
-    select opt in "${options[@]}"; do
-        case $REPLY in
-            1) install_base && install_chinese && install_fonts && install_packages ;;
-            2) install_base ;;
-            3) install_chinese ;;
-            4) install_fonts ;;
-            5) install_packages ;;
-            6) exit 0 ;;
-            *) echo -e "${RED}无效选项!${NC}";;
-        esac
-        break
+    for i in "${!options[@]}"; do
+        printf '%s) %s\n' "$((i + 1))" "${options[$i]}"
     done
+    read -r -p "#? " choice
+    choice="${choice:-1}"
+    case "$choice" in
+        1) install_full_default ;;
+        2) install_base ;;
+        3) install_chinese ;;
+        4) install_fonts ;;
+        5) install_packages ;;
+        6) repair_installation ;;
+        7) exit 0 ;;
+        *) echo -e "${RED}无效选项!${NC}"; show_menu ;;
+    esac
 }
 
 # Core Functions
@@ -483,42 +537,10 @@ install_base() {
     echo -e "\n${YELLOW}▶ 正在安装基础服务...${NC}"
     local MONGO_CONTAINER
     local SHARELATEX_CONTAINER
-    
-    # Check and install dependencies
-    for cmd in docker git unzip curl bc; do
-        if ! command -v $cmd &>/dev/null; then
-            echo -e "${YELLOW}▶ 安装依赖: $cmd...${NC}"
-            apt-get update && apt-get install -y $cmd || {
-                echo -e "${RED}✗ 安装 $cmd 失败!${NC}"; exit 1
-            }
-        fi
-    done
 
-    if ! docker compose version &>/dev/null && ! command -v docker-compose &>/dev/null; then
-        echo -e "${YELLOW}▶ 安装依赖: docker compose...${NC}"
-        apt-get update && (apt-get install -y docker-compose-plugin || apt-get install -y docker-compose) || {
-            echo -e "${RED}✗ 安装 docker compose 失败!${NC}"; exit 1
-        }
-    fi
-
-    # 检查并安装bc（用于版本比较）
-    if ! command -v bc &>/dev/null; then
-        apt-get install -y bc
-    fi
-
-    mkdir -p "$INSTALL_DIR" && cd "$INSTALL_DIR" || exit 1
-    if [ ! -d "$TOOLKIT_DIR" ]; then
-        git clone https://github.com/overleaf/toolkit.git overleaf-toolkit || {
-            echo -e "${RED}✗ 克隆失败!${NC}"; exit 1
-        }
-    else
-        echo -e "${GREEN}✓ 已存在 overleaf-toolkit，跳过克隆${NC}"
-    fi
-
-    cd "$TOOLKIT_DIR" || exit 1
-    bin/init || {
-        echo -e "${RED}✗ overleaf-toolkit 初始化失败!${NC}"; return 1
-    }
+    ensure_dependencies || return 1
+    ensure_toolkit_checkout || return 1
+    ensure_toolkit_initialized || return 1
 
     if [ ! -f "config/overleaf.rc" ]; then
         echo -e "${RED}✗ 未找到 config/overleaf.rc!${NC}"
@@ -684,7 +706,11 @@ install_chinese() {
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✓ 中文支持已安装完成!${NC}"
-        offer_persist_sharelatex_image "$SHARELATEX_CONTAINER" || return 1
+        if [ "$AUTO_MODE" = "1" ]; then
+            echo -e "${YELLOW}→ 自动模式下暂不固化镜像，将在完整安装结束后统一处理${NC}"
+        else
+            offer_persist_sharelatex_image "$SHARELATEX_CONTAINER" || return 1
+        fi
     else
         echo -e "${RED}✗ 中文支持安装失败，请检查 tlmgr 输出${NC}"
         return 1
@@ -818,6 +844,126 @@ install_fonts() {
     done
 }
 
+install_default_fonts() {
+    echo -e "\n${YELLOW}▶ 正在安装推荐字体包（Windows 核心字体 + Noto CJK）...${NC}"
+    local SHARELATEX_CONTAINER
+
+    SHARELATEX_CONTAINER=$(get_container "sharelatex" "sharelatex")
+    if [ -z "$SHARELATEX_CONTAINER" ]; then
+        echo -e "${RED}✗ sharelatex 容器未运行!${NC}"
+        return 1
+    fi
+
+    docker exec "$SHARELATEX_CONTAINER" bash -c '
+        set -e
+        export DEBIAN_FRONTEND=noninteractive
+        command -v fc-cache >/dev/null || apt-get update
+        echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula boolean true" | debconf-set-selections
+        apt-get update
+        apt-get install -y fontconfig cabextract xfonts-utils ttf-mscorefonts-installer fonts-noto-cjk fonts-noto
+        fc-cache -fv >/dev/null 2>&1 || true
+        fc-match "Times New Roman" >/dev/null
+        fc-match "Noto Sans CJK SC" >/dev/null || fc-match "Noto Sans CJK" >/dev/null
+    ' || {
+        echo -e "${RED}✗ 推荐字体包安装失败${NC}"
+        return 1
+    }
+
+    echo -e "${GREEN}✓ 推荐字体包已安装并刷新缓存${NC}"
+}
+
+install_common_latex_packages() {
+    local SHARELATEX_CONTAINER="$1"
+    local COMMON_PKGS
+
+    COMMON_PKGS="
+    collection-latexextra
+    amsmath amsfonts mathtools tools physics graphics
+    geometry fancyhdr enumitem titlesec hyperref
+    booktabs caption float listings algorithms algorithmicx
+    xcolor soul tikz-cd mhchem wrapfig multirow
+    abstract natbib gbt7714 lastpage tocloft fancyvrb cprotect
+    "
+
+    echo -e "${YELLOW}▶ 正在安装常用论文模板及排版宏包...${NC}"
+    docker exec "$SHARELATEX_CONTAINER" tlmgr install $COMMON_PKGS
+}
+
+install_packages_default() {
+    echo -e "\n${YELLOW}▶ 正在安装推荐 LaTeX 宏包...${NC}"
+    local SHARELATEX_CONTAINER
+
+    SHARELATEX_CONTAINER=$(get_container "sharelatex" "sharelatex")
+    if [ -z "$SHARELATEX_CONTAINER" ]; then
+        echo -e "${RED}✗ sharelatex 容器未运行，请先启动基础服务!${NC}"
+        return 1
+    fi
+
+    prepare_tlmgr "$SHARELATEX_CONTAINER" || return 1
+    install_common_latex_packages "$SHARELATEX_CONTAINER" || {
+        echo -e "${RED}✗ 推荐宏包安装失败，请检查 tlmgr 输出${NC}"
+        return 1
+    }
+
+    echo -e "${GREEN}✓ 推荐宏包安装完成!${NC}"
+}
+
+install_full_default() {
+    local SHARELATEX_CONTAINER
+    local previous_auto_mode="$AUTO_MODE"
+
+    echo -e "\n${YELLOW}▶ 正在执行推荐完整安装...${NC}"
+    AUTO_MODE=1
+    install_base &&
+    install_chinese &&
+    install_default_fonts &&
+    install_packages_default || {
+        AUTO_MODE="$previous_auto_mode"
+        return 1
+    }
+    AUTO_MODE="$previous_auto_mode"
+
+    SHARELATEX_CONTAINER=$(get_container "sharelatex" "sharelatex")
+    if [ -n "$SHARELATEX_CONTAINER" ]; then
+        persist_sharelatex_image "$SHARELATEX_CONTAINER" && recreate_sharelatex_container || return 1
+    fi
+
+    echo -e "${GREEN}✓ 推荐完整安装完成!${NC}"
+}
+
+repair_installation() {
+    echo -e "\n${YELLOW}▶ 正在自动检测并修复现有安装...${NC}"
+
+    ensure_dependencies || return 1
+    ensure_toolkit_checkout || return 1
+    ensure_toolkit_initialized || return 1
+
+    if [ ! -f "config/overleaf.rc" ]; then
+        echo -e "${RED}✗ 修复失败：未找到 config/overleaf.rc${NC}"
+        return 1
+    fi
+
+    echo -e "${YELLOW}▶ 正在修复核心配置...${NC}"
+    set_rc_value "OVERLEAF_LISTEN_IP" "$LISTEN_IP" "config/overleaf.rc"
+    set_rc_value "OVERLEAF_PORT" "8888" "config/overleaf.rc"
+    set_rc_value "MONGO_VERSION" "$MONGO_VERSION" "config/overleaf.rc"
+    set_rc_value "SIBLING_CONTAINERS_ENABLED" "false" "config/overleaf.rc"
+    configure_chinese_ui || return 1
+    ensure_amd64_emulation || return 1
+    configure_arm64_compose_override || return 1
+
+    echo -e "${YELLOW}▶ 正在重新启动/修复基础服务...${NC}"
+    bin/up -d || {
+        echo -e "${RED}✗ 服务启动失败!${NC}"
+        show_compose_logs "mongo"
+        show_compose_logs "sharelatex"
+        return 1
+    }
+
+    echo -e "${GREEN}✓ 修复完成，正在检查服务状态...${NC}"
+    install_base
+}
+
 # New: Install LaTeX Packages
 install_packages() {
     echo -e "\n${YELLOW}▶ 开始安装 LaTeX 宏包...${NC}"
@@ -867,17 +1013,7 @@ install_packages() {
                 break
                 ;;
             2)
-                # 推荐论文模板与常用宏包
-                COMMON_PKGS="
-                collection-latexextra
-                amsmath amsfonts mathtools tools physics graphics
-                geometry fancyhdr enumitem titlesec hyperref
-                booktabs caption float listings algorithms algorithmicx
-                xcolor soul tikz-cd mhchem wrapfig multirow
-                abstract natbib gbt7714 lastpage tocloft fancyvrb cprotect
-                "
-                echo -e "${YELLOW}▶ 正在安装常用论文模板及排版宏包...${NC}"
-                docker exec "$SHARELATEX_CONTAINER" tlmgr install $COMMON_PKGS && {
+                install_common_latex_packages "$SHARELATEX_CONTAINER" && {
                     echo -e "${GREEN}✓ 常用宏包安装完成!${NC}"
                     offer_persist_sharelatex_image "$SHARELATEX_CONTAINER" || return 1
                 } || {

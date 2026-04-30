@@ -1,9 +1,11 @@
 #!/bin/bash
-# OVERSEI Installer v5.7
+# OVERSEI Installer v5.8
 # GitHub: https://github.com/AMTOPA/Overleaf-Sharelatex-Easy-Install  
 
-# 发送 API 计数请求（静默模式，不影响脚本执行）
-curl -s "https://js.ruseo.cn/api/counter.php?api_key=3976bd1973c3c40ee8c2f7f4a12b059b&action=increment&counter_id=0bc7f9e8ed200173dc9205089c2d3036&value=1" >/dev/null 2>&1 &
+send_usage_counter() {
+    [ "${OVERSEI_DISABLE_COUNTER:-0}" = "1" ] && return 0
+    curl -s "https://js.ruseo.cn/api/counter.php?api_key=3976bd1973c3c40ee8c2f7f4a12b059b&action=increment&counter_id=0bc7f9e8ed200173dc9205089c2d3036&value=1" >/dev/null 2>&1 &
+}
 
 # ASCII Art and Colors
 RED='\033[1;31m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'
@@ -404,13 +406,120 @@ get_container() {
     local exact_name="$1"
     local pattern="$2"
     local name
+    local status
 
     name=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E "^${exact_name}$" | head -1)
+    if [ -n "$name" ]; then
+        status=$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null || true)
+        if [ "$status" = "running" ]; then
+            echo "$name"
+            return 0
+        fi
+    fi
+
     if [ -z "$name" ] && [ -n "$pattern" ]; then
-        name=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E "$pattern" | head -1)
+        while IFS= read -r name; do
+            [ -z "$name" ] && continue
+            status=$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null || true)
+            if [ "$status" = "running" ]; then
+                echo "$name"
+                return 0
+            fi
+        done <<EOF
+$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E "$pattern")
+EOF
+    fi
+}
+
+get_container_any() {
+    local exact_name="$1"
+    local pattern="$2"
+    local name
+
+    name=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^${exact_name}$" | head -1)
+    if [ -z "$name" ] && [ -n "$pattern" ]; then
+        name=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "$pattern" | head -1)
     fi
 
     echo "$name"
+}
+
+is_container_exec_ready() {
+    local container="$1"
+    local status
+
+    [ -n "$container" ] || return 1
+    status=$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null || true)
+    [ "$status" = "running" ] || return 1
+    docker exec "$container" sh -c 'true' >/dev/null 2>&1
+}
+
+wait_for_container_exec() {
+    local container="$1"
+    local label="${2:-container}"
+    local timeout="${3:-180}"
+    local elapsed=0
+    local interval=3
+    local status
+
+    while [ "$elapsed" -lt "$timeout" ]; do
+        if is_container_exec_ready "$container"; then
+            return 0
+        fi
+
+        status=$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null || true)
+        if [ "$status" = "restarting" ]; then
+            echo -ne "${YELLOW}等待 ${label} 结束重启循环 (${elapsed}/${timeout}s)...${NC}\r"
+        else
+            echo -ne "${YELLOW}等待 ${label} 可执行命令 (${elapsed}/${timeout}s)...${NC}\r"
+        fi
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+    done
+    echo ""
+
+    status=$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null || true)
+    echo -e "${RED}✗ ${label} 未进入可执行状态，当前状态: ${status:-unknown}${NC}"
+    return 1
+}
+
+wait_for_service_container() {
+    local exact_name="$1"
+    local pattern="$2"
+    local label="$3"
+    local timeout="${4:-180}"
+    local elapsed=0
+    local interval=3
+    local container
+    local status
+
+    READY_CONTAINER=""
+    while [ "$elapsed" -lt "$timeout" ]; do
+        container=$(get_container_any "$exact_name" "$pattern")
+        if [ -n "$container" ]; then
+            if is_container_exec_ready "$container"; then
+                READY_CONTAINER="$container"
+                echo -e "${GREEN}✓ ${label} 容器已启动并可执行命令${NC}"
+                return 0
+            fi
+            status=$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null || true)
+            echo -ne "${YELLOW}等待 ${label} 就绪，当前状态: ${status:-unknown} (${elapsed}/${timeout}s)...${NC}\r"
+        else
+            echo -ne "${YELLOW}等待 ${label} 容器创建 (${elapsed}/${timeout}s)...${NC}\r"
+        fi
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+    done
+    echo ""
+
+    container=$(get_container_any "$exact_name" "$pattern")
+    if [ -n "$container" ]; then
+        status=$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null || true)
+        echo -e "${RED}✗ ${label} 容器未就绪，当前状态: ${status:-unknown}${NC}"
+    else
+        echo -e "${RED}✗ ${label} 容器未创建${NC}"
+    fi
+    return 1
 }
 
 show_compose_logs() {
@@ -476,6 +585,31 @@ is_private_ipv4() {
     return 1
 }
 
+is_likely_proxy_ipv4() {
+    local ip="$1"
+    local IFS=.
+    local a b c d
+
+    is_ipv4 "$ip" || return 1
+    read -r a b c d <<< "$ip"
+
+    # Common Cloudflare/WARP egress ranges are not directly reachable server IPs.
+    [ "$a" -eq 104 ] && [ "$b" -ge 16 ] && [ "$b" -le 31 ] && return 0
+    [ "$a" -eq 172 ] && [ "$b" -ge 64 ] && [ "$b" -le 71 ] && return 0
+    [ "$a" -eq 162 ] && [ "$b" -ge 158 ] && [ "$b" -le 159 ] && return 0
+    [ "$a" -eq 198 ] && [ "$b" -eq 41 ] && [ "$c" -ge 128 ] && return 0
+    return 1
+}
+
+is_likely_proxy_ipv6() {
+    local ip="$1"
+
+    case "$ip" in
+        2a09:bac5:*|2606:4700:*|2400:cb00:*|2405:8100:*|2a06:98c0:*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 format_url_host() {
     local host="$1"
 
@@ -488,29 +622,75 @@ format_url_host() {
 
 detect_public_ipv4() {
     local ip
+    local response
 
-    ip=$(curl -4 -fsSL --connect-timeout 5 https://api.ipify.org 2>/dev/null ||
-        curl -4 -fsSL --connect-timeout 5 https://ipv4.icanhazip.com 2>/dev/null ||
+    if [ -n "${OVERSEI_PUBLIC_IPV4:-}" ]; then
+        ip=$(printf '%s' "$OVERSEI_PUBLIC_IPV4" | tr -d '[:space:]')
+        if is_ipv4 "$ip" && ! is_private_ipv4 "$ip"; then
+            echo "$ip"
+            return 0
+        fi
+        echo -e "${YELLOW}⚠ OVERSEI_PUBLIC_IPV4 不是有效公网 IPv4，已忽略${NC}" >&2
+    fi
+
+    ip=$(curl -4 -fsSL --connect-timeout 3 --max-time 4 https://api.ipify.org 2>/dev/null ||
+        curl -4 -fsSL --connect-timeout 3 --max-time 4 https://ipv4.icanhazip.com 2>/dev/null ||
+        true)
+    ip=$(printf '%s' "$ip" | tr -d '[:space:]')
+    if is_ipv4 "$ip" && ! is_private_ipv4 "$ip"; then
+        if ! is_likely_proxy_ipv4 "$ip"; then
+            echo "$ip"
+            return 0
+        fi
+        echo -e "${YELLOW}⚠ 检测到的 IPv4 ${ip} 像是代理/WARP 出口地址，将继续尝试云厂商 metadata。${NC}" >&2
+    fi
+
+    response=$(curl -fsSL --connect-timeout 1 --max-time 1 http://169.254.169.254/opc/v1/vnics/ 2>/dev/null || true)
+    ip=$(printf '%s' "$response" | grep -oE '"publicIp"[[:space:]]*:[[:space:]]*"([0-9]{1,3}\.){3}[0-9]{1,3}"' | head -1 | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' || true)
+    if is_ipv4 "$ip" && ! is_private_ipv4 "$ip"; then
+        echo "$ip"
+        return 0
+    fi
+
+    response=$(curl -fsSL --connect-timeout 1 --max-time 1 -H "Authorization: Bearer Oracle" http://169.254.169.254/opc/v2/vnics/ 2>/dev/null || true)
+    ip=$(printf '%s' "$response" | grep -oE '"publicIp"[[:space:]]*:[[:space:]]*"([0-9]{1,3}\.){3}[0-9]{1,3}"' | head -1 | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' || true)
+    if is_ipv4 "$ip" && ! is_private_ipv4 "$ip"; then
+        echo "$ip"
+        return 0
+    fi
+
+    ip=$(curl -fsSL --connect-timeout 1 --max-time 1 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null ||
+        curl -fsSL --connect-timeout 1 --max-time 1 -H "Metadata-Flavor: Google" http://169.254.169.254/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip 2>/dev/null ||
+        curl -fsSL --connect-timeout 1 --max-time 1 -H "Metadata: true" "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress?api-version=2021-02-01&format=text" 2>/dev/null ||
+        curl -fsSL --connect-timeout 1 --max-time 1 http://100.100.100.200/latest/meta-data/eipv4 2>/dev/null ||
+        curl -fsSL --connect-timeout 1 --max-time 1 http://metadata.tencentyun.com/latest/meta-data/public-ipv4 2>/dev/null ||
         true)
     ip=$(printf '%s' "$ip" | tr -d '[:space:]')
     if is_ipv4 "$ip" && ! is_private_ipv4 "$ip"; then
         echo "$ip"
+        return 0
     fi
+    echo -e "${YELLOW}⚠ 未自动识别公网 IPv4；可用 OVERSEI_PUBLIC_IPV4=你的公网IP 指定。${NC}" >&2
 }
 
 detect_public_ipv6() {
     local ip
 
-    ip=$(curl -6 -fsSL --connect-timeout 5 https://api64.ipify.org 2>/dev/null ||
-        curl -6 -fsSL --connect-timeout 5 https://ipv6.icanhazip.com 2>/dev/null ||
+    ip=$(curl -6 -fsSL --connect-timeout 5 --max-time 6 https://api64.ipify.org 2>/dev/null ||
+        curl -6 -fsSL --connect-timeout 5 --max-time 6 https://ipv6.icanhazip.com 2>/dev/null ||
         true)
     ip=$(printf '%s' "$ip" | tr -d '[:space:]')
     if is_ipv6 "$ip"; then
+        if is_likely_proxy_ipv6 "$ip"; then
+            echo -e "${YELLOW}⚠ 检测到的 IPv6 ${ip} 像是代理/WARP 出口地址，已跳过。${NC}" >&2
+            return 1
+        fi
         echo "$ip"
     fi
 }
 
 load_runtime_config() {
+    local detect_ips="${1:-1}"
     local rc_file="$TOOLKIT_DIR/config/overleaf.rc"
     local configured_port
     local configured_ip
@@ -527,8 +707,13 @@ load_runtime_config() {
         LISTEN_IP="0.0.0.0"
     fi
 
-    PUBLIC_IPV4=$(detect_public_ipv4)
-    PUBLIC_IPV6=$(detect_public_ipv6)
+    if [ "$detect_ips" = "1" ]; then
+        PUBLIC_IPV4=$(detect_public_ipv4)
+        PUBLIC_IPV6=""
+        if [ -z "${PUBLIC_IPV4:-}" ] || [ "${OVERSEI_DETECT_IPV6:-0}" = "1" ]; then
+            PUBLIC_IPV6=$(detect_public_ipv6)
+        fi
+    fi
 }
 
 prepare_tlmgr() {
@@ -536,6 +721,8 @@ prepare_tlmgr() {
     local current_repo="https://mirrors.tuna.tsinghua.edu.cn/CTAN/systems/texlive/tlnet"
     local texlive_year
     local historic_repo
+
+    wait_for_container_exec "$container" "sharelatex" 180 || return 1
 
     docker exec "$container" tlmgr option repository "$current_repo" >/dev/null 2>&1 || true
     if docker exec "$container" bash -c 'tlmgr update --self'; then
@@ -724,7 +911,7 @@ print_banner() {
  ╚═════╝   ╚═══╝  ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝
 EOF
 
-    echo -e "${CYAN}:: OVERSEI - Overleaf/ShareLaTeX Easy Installer v5.7 ::${NC}\n"
+    echo -e "${CYAN}:: OVERSEI - Overleaf/ShareLaTeX Easy Installer v5.8 ::${NC}\n"
 }
 
 # Main Menu
@@ -797,17 +984,8 @@ install_base() {
     # 等待服务启动，增加版本检查
     echo -e "${YELLOW}▶ 等待服务启动并检查版本兼容性...${NC}"
     
-    # 增加等待时间，确保容器完全启动
-    for i in {1..10}; do
-        echo -ne "${YELLOW}等待服务启动 ($i/10)...${NC}\r"
-        sleep 5
-    done
-    echo ""
-    
-    # 检查MongoDB容器是否运行
-    MONGO_CONTAINER=$(get_container "mongo" "mongo")
-    if [ -n "$MONGO_CONTAINER" ]; then
-        echo -e "${GREEN}✓ MongoDB 容器已启动${NC}"
+    if wait_for_service_container "mongo" "mongo" "MongoDB" 120; then
+        MONGO_CONTAINER="$READY_CONTAINER"
         
         # 检查MongoDB版本
         echo -e "${YELLOW}▶ 正在检查 MongoDB 实际版本...${NC}"
@@ -840,15 +1018,13 @@ install_base() {
         return 1
     fi
 
-    SHARELATEX_CONTAINER=$(get_container "sharelatex" "sharelatex")
-    if [ -z "$SHARELATEX_CONTAINER" ]; then
-        echo -e "${RED}✗ sharelatex 容器未运行!${NC}"
+    if ! wait_for_service_container "sharelatex" "sharelatex" "sharelatex" 240; then
         echo -e "${YELLOW}▶ 正在检查日志...${NC}"
         show_compose_logs "sharelatex"
         return 1
     fi
+    SHARELATEX_CONTAINER="$READY_CONTAINER"
     
-    echo -e "${GREEN}✓ sharelatex 容器已启动${NC}"
     show_access_urls "$SHARELATEX_CONTAINER"
 }
 
@@ -862,6 +1038,10 @@ install_chinese() {
         echo -e "${RED}✗ sharelatex 容器未运行!${NC}"
         return 1
     fi
+    wait_for_container_exec "$SHARELATEX_CONTAINER" "sharelatex" 180 || {
+        show_compose_logs "sharelatex"
+        return 1
+    }
     configure_chinese_ui || return 1
 
     # 先更新tlmgr自身
@@ -954,6 +1134,10 @@ install_fonts() {
         echo -e "${RED}✗ sharelatex 容器未运行!${NC}"
         return 1
     fi
+    wait_for_container_exec "$SHARELATEX_CONTAINER" "sharelatex" 180 || {
+        show_compose_logs "sharelatex"
+        return 1
+    }
     options=(
         "Windows核心字体 (包含Times New Roman等)"
         "Adobe字体" 
@@ -1081,6 +1265,10 @@ install_default_fonts() {
         echo -e "${RED}✗ sharelatex 容器未运行!${NC}"
         return 1
     fi
+    wait_for_container_exec "$SHARELATEX_CONTAINER" "sharelatex" 180 || {
+        show_compose_logs "sharelatex"
+        return 1
+    }
 
     docker exec "$SHARELATEX_CONTAINER" bash -c '
         set -e
@@ -1126,6 +1314,10 @@ install_packages_default() {
         echo -e "${RED}✗ sharelatex 容器未运行，请先启动基础服务!${NC}"
         return 1
     fi
+    wait_for_container_exec "$SHARELATEX_CONTAINER" "sharelatex" 180 || {
+        show_compose_logs "sharelatex"
+        return 1
+    }
 
     prepare_tlmgr "$SHARELATEX_CONTAINER" || return 1
     install_common_latex_packages "$SHARELATEX_CONTAINER" || {
@@ -1153,6 +1345,7 @@ install_full_default() {
 
     SHARELATEX_CONTAINER=$(get_container "sharelatex" "sharelatex")
     if [ -n "$SHARELATEX_CONTAINER" ]; then
+        wait_for_container_exec "$SHARELATEX_CONTAINER" "sharelatex" 180 || return 1
         persist_sharelatex_image "$SHARELATEX_CONTAINER" && recreate_sharelatex_container || return 1
     fi
 
@@ -1187,6 +1380,10 @@ install_packages() {
         echo -e "${RED}✗ sharelatex 容器未运行，请先启动基础服务!${NC}"
         return 1
     fi
+    wait_for_container_exec "$SHARELATEX_CONTAINER" "sharelatex" 180 || {
+        show_compose_logs "sharelatex"
+        return 1
+    }
 
     # Ensure tlmgr is ready
     echo -e "${YELLOW}▶ 正在准备 tlmgr...${NC}"
@@ -1308,7 +1505,7 @@ EOF
 }
 
 show_status() {
-    load_runtime_config
+    load_runtime_config 0
     echo -e "${BLUE}OVERSEI 状态:${NC}"
     echo "Toolkit: $TOOLKIT_DIR"
     echo "Port: ${OVERLEAF_PORT}"
@@ -1458,6 +1655,7 @@ run_cli() {
 run_interactive_main() {
     print_banner
     require_root
+    send_usage_counter
     install_cli_command || true
     choose_deployment_type
     select_latest_mongo_version

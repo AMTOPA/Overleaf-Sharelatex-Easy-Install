@@ -1,5 +1,5 @@
 #!/bin/bash
-# OVERSEI Installer v5.9
+# OVERSEI Installer v6.0
 # GitHub: https://github.com/AMTOPA/Overleaf-Sharelatex-Easy-Install  
 
 send_usage_counter() {
@@ -277,52 +277,25 @@ ensure_toolkit_initialized() {
     }
 }
 
-ensure_amd64_emulation() {
+ensure_arm_native_image() {
     if ! is_arm64_host; then
         return 0
     fi
 
-    echo -e "${YELLOW}▶ 检测到 ARM64/aarch64 主机，ShareLaTeX 官方镜像将使用 linux/amd64 兼容模式运行...${NC}"
+    local arm_image="${OVERSEI_ARM_IMAGE:-pingwin02/sharelatex-arm:full}"
+    echo -e "${YELLOW}▶ 检测到 ARM64/aarch64 主机，使用原生 ARM 镜像: ${arm_image}${NC}"
 
-    if ! command -v qemu-x86_64-static &>/dev/null || ! command -v update-binfmts &>/dev/null; then
-        echo -e "${YELLOW}▶ 安装 amd64 容器兼容依赖: qemu-user-static binfmt-support...${NC}"
-        apt-get update && apt-get install -y qemu-user-static binfmt-support || {
-            echo -e "${RED}✗ 安装 amd64 兼容依赖失败，ARM64 主机无法运行 ShareLaTeX amd64 镜像${NC}"
-            return 1
-        }
-    fi
-
-    if [ ! -d /proc/sys/fs/binfmt_misc ]; then
-        mkdir -p /proc/sys/fs/binfmt_misc >/dev/null 2>&1 || true
-    fi
-    if [ ! -f /proc/sys/fs/binfmt_misc/register ]; then
-        mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc >/dev/null 2>&1 || true
-    fi
-
-    if command -v update-binfmts &>/dev/null; then
-        update-binfmts --enable qemu-x86_64 >/dev/null 2>&1 || true
-    fi
-
-    if command -v systemctl &>/dev/null; then
-        systemctl restart systemd-binfmt >/dev/null 2>&1 || true
-    fi
-
-    if [ ! -f /proc/sys/fs/binfmt_misc/qemu-x86_64 ] || ! grep -qi enabled /proc/sys/fs/binfmt_misc/qemu-x86_64 2>/dev/null; then
-        echo -e "${YELLOW}▶ 正在通过 Docker 注册 amd64 binfmt 模拟器...${NC}"
-        docker run --privileged --rm tonistiigi/binfmt --install amd64 >/dev/null 2>&1 ||
-        docker run --privileged --rm multiarch/qemu-user-static --reset -p yes >/dev/null 2>&1 || true
-    fi
-
-    if [ -f /proc/sys/fs/binfmt_misc/qemu-x86_64 ] && grep -qi enabled /proc/sys/fs/binfmt_misc/qemu-x86_64 2>/dev/null; then
-        echo -e "${GREEN}✓ amd64 容器兼容支持已启用${NC}"
-    else
-        echo -e "${RED}✗ amd64 binfmt 模拟器未启用，继续启动会出现 exec /sbin/my_init: exec format error${NC}"
-        echo -e "${YELLOW}   可手动执行: docker run --privileged --rm tonistiigi/binfmt --install amd64${NC}"
+    echo -e "${YELLOW}▶ 拉取原生 ARM64 Overleaf 镜像...${NC}"
+    docker pull "$arm_image" || {
+        echo -e "${RED}✗ 拉取 ARM 原生镜像失败: ${arm_image}${NC}"
+        echo -e "${YELLOW}   可用 tag: latest, full, slim, base${NC}"
+        echo -e "${YELLOW}   可通过 OVERSEI_ARM_IMAGE 环境变量指定自定义镜像${NC}"
         return 1
-    fi
+    }
+    echo -e "${GREEN}✓ ARM 原生镜像已就绪: ${arm_image}${NC}"
 }
 
-configure_arm64_compose_override() {
+configure_arm_compose_override() {
     local override_file="config/docker-compose.override.yml"
     local tmp_file
     local updated=0
@@ -331,81 +304,38 @@ configure_arm64_compose_override() {
         return 0
     fi
 
-    if [ ! -f "$override_file" ]; then
-        cat > "$override_file" <<'EOF'
+    local arm_image="${OVERSEI_ARM_IMAGE:-pingwin02/sharelatex-arm:full}"
+    local target_content
+    target_content=$(cat <<EOF
 services:
   sharelatex:
-    platform: linux/amd64
+    image: ${arm_image}
+    platform: linux/arm64
 EOF
-        echo -e "${GREEN}✓ 已为 ARM64 主机配置 ShareLaTeX 使用 linux/amd64 镜像平台${NC}"
+)
+
+    if [ ! -f "$override_file" ]; then
+        printf '%s\n' "$target_content" > "$override_file"
+        echo -e "${GREEN}✓ 已为 ARM64 配置原生镜像: ${arm_image}${NC}"
         return 0
     fi
 
-    if awk '
-        /^[[:space:]]*sharelatex:[[:space:]]*$/ { in_sharelatex=1; next }
-        in_sharelatex && /^  [A-Za-z0-9_.-]+:[[:space:]]*$/ { in_sharelatex=0 }
-        in_sharelatex && /^[[:space:]]*platform:[[:space:]]*linux\/amd64[[:space:]]*$/ { found=1 }
-        END { exit found ? 0 : 1 }
-    ' "$override_file"; then
-        echo -e "${GREEN}✓ ARM64 Docker Compose 平台配置已存在${NC}"
+    # Check if already configured correctly
+    if grep -q "image: ${arm_image}" "$override_file" 2>/dev/null && \
+       grep -q 'platform: linux/arm64' "$override_file" 2>/dev/null; then
+        echo -e "${GREEN}✓ ARM64 Docker Compose 配置已存在${NC}"
         return 0
     fi
 
+    # Backup existing override file
     cp "$override_file" "${override_file}.bak.$(date +%Y%m%d%H%M%S)" || {
         echo -e "${RED}✗ 备份 $override_file 失败${NC}"
         return 1
     }
 
+    # Write fresh ARM-native config (overwrites old amd64 emulation config)
     tmp_file=$(mktemp) || return 1
-    if grep -q '^  sharelatex:[[:space:]]*$' "$override_file"; then
-        awk '
-            BEGIN { in_sharelatex=0; inserted=0; replaced=0 }
-            function insert_platform() {
-                if (!inserted && !replaced) {
-                    print "    platform: linux/amd64"
-                    inserted=1
-                }
-            }
-            {
-                if (in_sharelatex && $0 ~ /^  [A-Za-z0-9_.-]+:[[:space:]]*$/) {
-                    insert_platform()
-                    in_sharelatex=0
-                }
-                if ($0 ~ /^  sharelatex:[[:space:]]*$/) {
-                    print
-                    in_sharelatex=1
-                    next
-                }
-                if (in_sharelatex && $0 ~ /^    platform:[[:space:]]*/) {
-                    print "    platform: linux/amd64"
-                    replaced=1
-                    next
-                }
-                print
-            }
-            END {
-                if (in_sharelatex) {
-                    insert_platform()
-                }
-            }
-        ' "$override_file" > "$tmp_file" && mv "$tmp_file" "$override_file" && updated=1
-    elif grep -q '^services:[[:space:]]*$' "$override_file"; then
-        awk '
-            {
-                print
-                if (!inserted && $0 ~ /^services:[[:space:]]*$/) {
-                    print "  sharelatex:"
-                    print "    platform: linux/amd64"
-                    inserted=1
-                }
-            }
-        ' "$override_file" > "$tmp_file" && mv "$tmp_file" "$override_file" && updated=1
-    else
-        {
-            cat "$override_file"
-            printf '\nservices:\n  sharelatex:\n    platform: linux/amd64\n'
-        } > "$tmp_file" && mv "$tmp_file" "$override_file" && updated=1
-    fi
+    printf '%s\n' "$target_content" > "$tmp_file" && mv "$tmp_file" "$override_file" && updated=1
 
     if [ "$updated" -ne 1 ]; then
         rm -f "$tmp_file"
@@ -413,7 +343,8 @@ EOF
         return 1
     fi
 
-    echo -e "${GREEN}✓ 已更新 ARM64 Docker Compose 平台配置: ${override_file}${NC}"
+    echo -e "${GREEN}✓ 已更新 ARM64 Docker Compose 配置: ${override_file}${NC}"
+    echo -e "${GREEN}  镜像: ${arm_image}  平台: linux/arm64${NC}"
 }
 
 get_container() {
@@ -599,30 +530,6 @@ is_private_ipv4() {
     return 1
 }
 
-is_likely_proxy_ipv4() {
-    local ip="$1"
-    local IFS=.
-    local a b c d
-
-    is_ipv4 "$ip" || return 1
-    read -r a b c d <<< "$ip"
-
-    # Common Cloudflare/WARP egress ranges are not directly reachable server IPs.
-    [ "$a" -eq 104 ] && [ "$b" -ge 16 ] && [ "$b" -le 31 ] && return 0
-    [ "$a" -eq 172 ] && [ "$b" -ge 64 ] && [ "$b" -le 71 ] && return 0
-    [ "$a" -eq 162 ] && [ "$b" -ge 158 ] && [ "$b" -le 159 ] && return 0
-    [ "$a" -eq 198 ] && [ "$b" -eq 41 ] && [ "$c" -ge 128 ] && return 0
-    return 1
-}
-
-is_likely_proxy_ipv6() {
-    local ip="$1"
-
-    case "$ip" in
-        2a09:bac5:*|2606:4700:*|2400:cb00:*|2405:8100:*|2a06:98c0:*) return 0 ;;
-        *) return 1 ;;
-    esac
-}
 
 format_url_host() {
     local host="$1"
@@ -652,11 +559,8 @@ detect_public_ipv4() {
         true)
     ip=$(printf '%s' "$ip" | tr -d '[:space:]')
     if is_ipv4 "$ip" && ! is_private_ipv4 "$ip"; then
-        if ! is_likely_proxy_ipv4 "$ip"; then
-            echo "$ip"
-            return 0
-        fi
-        echo -e "${YELLOW}⚠ 检测到的 IPv4 ${ip} 像是代理/WARP 出口地址，将继续尝试云厂商 metadata。${NC}" >&2
+        echo "$ip"
+        return 0
     fi
 
     response=$(curl -fsSL --connect-timeout 1 --max-time 1 http://169.254.169.254/opc/v1/vnics/ 2>/dev/null || true)
@@ -695,10 +599,6 @@ detect_public_ipv6() {
         true)
     ip=$(printf '%s' "$ip" | tr -d '[:space:]')
     if is_ipv6 "$ip"; then
-        if is_likely_proxy_ipv6 "$ip"; then
-            echo -e "${YELLOW}⚠ 检测到的 IPv6 ${ip} 像是代理/WARP 出口地址，已跳过。${NC}" >&2
-            return 1
-        fi
         echo "$ip"
     fi
 }
@@ -858,6 +758,23 @@ persist_sharelatex_image() {
         set_rc_value "OVERLEAF_IMAGE_NAME" "$image_name" "$TOOLKIT_DIR/config/overleaf.rc"
     fi
 
+    # On ARM, update docker-compose.override.yml to use the committed image
+    # so that subsequent rebuilds pick up the customized ARM-native image
+    if is_arm64_host; then
+        local override_file="$TOOLKIT_DIR/config/docker-compose.override.yml"
+        if [ -f "$override_file" ]; then
+            sed -i "s|^    image: .*|    image: ${image_tag}|" "$override_file" 2>/dev/null || {
+                # Create fresh override with committed image
+                cat > "$override_file" <<EOF_ARM_OVERRIDE
+services:
+  sharelatex:
+    image: ${image_tag}
+    platform: linux/arm64
+EOF_ARM_OVERRIDE
+            }
+        fi
+    fi
+
     echo -e "${GREEN}✓ 已固化自定义镜像: ${image_tag}${NC}"
     echo -e "${GREEN}✓ 后续 Overleaf Toolkit 将使用: ${image_tag}${NC}"
 }
@@ -983,8 +900,8 @@ install_base() {
     set_rc_value "MONGO_VERSION" "$MONGO_VERSION" "config/overleaf.rc"
     set_rc_value "SIBLING_CONTAINERS_ENABLED" "false" "config/overleaf.rc"
     configure_chinese_ui || return 1
-    ensure_amd64_emulation || return 1
-    configure_arm64_compose_override || return 1
+    ensure_arm_native_image || return 1
+    configure_arm_compose_override || return 1
 
     echo -e "${YELLOW}▶ 启动服务中...${NC}"
     
@@ -1072,56 +989,63 @@ install_chinese() {
     docker exec "$SHARELATEX_CONTAINER" bash -c '
         check_status=0
         
-        command -v fc-cache >/dev/null || (apt-get update && apt-get install -y fontconfig)
-        if ! fc-match "Times New Roman" | grep -qi "Times New Roman" || ! fc-match "Arial" | grep -qi "Arial"; then
-            export DEBIAN_FRONTEND=noninteractive
-            echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
-            apt-get update
-            apt-get install -y fontconfig cabextract xfonts-utils ttf-mscorefonts-installer
-        fi
+        export DEBIAN_FRONTEND=noninteractive
+        echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula boolean true" | debconf-set-selections
+        apt-get update
+        apt-get install -y fontconfig cabextract xfonts-utils ttf-mscorefonts-installer
+        fc-cache -fv >/dev/null 2>&1 || true
 
         # 安装中文支持包
         echo "正在安装中文宏包..."
         tlmgr install collection-langchinese xecjk ctex
         install_status=$?
         
-        # 创建中文字体目录
-        mkdir -p /usr/share/fonts/chinese
-        
-        # 下载中文字体
+        # 创建中文字体目录并下载
         echo "正在下载中文字体..."
-        if [ ! -f "/usr/share/fonts/chinese/simsun.ttc" ]; then
-            wget -q --timeout=10 --tries=2 -O /usr/share/fonts/chinese/simsun.ttc \
-                "https://github.com/jiaxiaochu/font/raw/master/simsun.ttc" || \
-            wget -q --timeout=10 --tries=2 -O /usr/share/fonts/chinese/simsun.ttc \
-                "https://mirrors.tuna.tsinghua.edu.cn/deepin/pool/non-free/f/fonts-simsun/simsun.ttc" || \
-            echo "下载simsun.ttc失败，将使用备用方案"
-        fi
-        
-        if [ ! -f "/usr/share/fonts/chinese/simkai.ttf" ]; then
-            wget -q --timeout=10 --tries=2 -O /usr/share/fonts/chinese/simkai.ttf \
-                "https://github.com/jiaxiaochu/font/raw/master/simkai.ttf" || \
-            wget -q --timeout=10 --tries=2 -O /usr/share/fonts/chinese/simkai.ttf \
-                "https://mirrors.tuna.tsinghua.edu.cn/deepin/pool/non-free/f/fonts-simsun/simkai.ttf" || \
-            echo "下载simkai.ttf失败，将使用备用方案"
-        fi
-        
+        mkdir -p /usr/share/fonts/chinese
         mkdir -p /usr/local/texlive/texmf-local/fonts/truetype/oversei
-        [ -s "/usr/share/fonts/chinese/simsun.ttc" ] && cp -f /usr/share/fonts/chinese/simsun.ttc /usr/local/texlive/texmf-local/fonts/truetype/oversei/simsun.ttc
+        simsun_ok=0
+
+        if [ ! -f "/usr/share/fonts/chinese/simsun.ttc" ]; then
+            wget -q --timeout=15 --tries=3 -O /usr/share/fonts/chinese/simsun.ttc \
+                "https://github.com/jiaxiaochu/font/raw/master/simsun.ttc" || \
+            wget -q --timeout=15 --tries=3 -O /usr/share/fonts/chinese/simsun.ttc \
+                "https://mirrors.tuna.tsinghua.edu.cn/deepin/pool/non-free/f/fonts-simsun/simsun.ttc" || \
+            wget -q --timeout=15 --tries=3 -O /usr/share/fonts/chinese/simsun.ttc \
+                "https://raw.githubusercontent.com/AMTOPA/font/main/simsun.ttc" || true
+        fi
+        if [ -s "/usr/share/fonts/chinese/simsun.ttc" ]; then
+            cp -f /usr/share/fonts/chinese/simsun.ttc /usr/local/texlive/texmf-local/fonts/truetype/oversei/simsun.ttc
+            simsun_ok=1
+        fi
+
+        if [ ! -f "/usr/share/fonts/chinese/simkai.ttf" ]; then
+            wget -q --timeout=15 --tries=3 -O /usr/share/fonts/chinese/simkai.ttf \
+                "https://github.com/jiaxiaochu/font/raw/master/simkai.ttf" || \
+            wget -q --timeout=15 --tries=3 -O /usr/share/fonts/chinese/simkai.ttf \
+                "https://mirrors.tuna.tsinghua.edu.cn/deepin/pool/non-free/f/fonts-simsun/simkai.ttf" || true
+        fi
         [ -s "/usr/share/fonts/chinese/simkai.ttf" ] && cp -f /usr/share/fonts/chinese/simkai.ttf /usr/local/texlive/texmf-local/fonts/truetype/oversei/simkai.ttf
+
+        # 如果 SimSun 下载失败，安装 Noto CJK 作为可靠的中文字体后备
+        if [ "$simsun_ok" -eq 0 ]; then
+            echo "SimSun 下载失败，安装 Noto CJK 作为后备中文字体..."
+            apt-get install -y fonts-noto-cjk fonts-noto 2>/dev/null || true
+        fi
         mktexlsr >/dev/null 2>&1 || true
 
-        # 刷新字体缓存
+        # 刷新字体缓存和 XeLaTeX/LuaLaTeX 字体数据库
         echo "正在刷新字体缓存..."
         fc-cache -fv 2>/dev/null || true
-        
+        luaotfload-tool --update --quiet 2>/dev/null || true
+
         # 检查安装结果
         echo "检查安装结果:"
         kpsewhich ctex.sty >/dev/null && echo "✓ ctex 已安装" || { echo "✗ ctex 未安装"; check_status=1; }
         kpsewhich xeCJK.sty >/dev/null && echo "✓ xeCJK 已安装" || { echo "✗ xeCJK 未安装"; check_status=1; }
         fc-match "Times New Roman" | grep -qi "Times New Roman" && echo "✓ Times New Roman 已安装" || { echo "✗ Times New Roman 未安装"; check_status=1; }
         fc-match "Arial" | grep -qi "Arial" && echo "✓ Arial 已安装" || { echo "✗ Arial 未安装"; check_status=1; }
-        fc-match "SimSun" | grep -qi "SimSun" && echo "✓ SimSun 已安装" || { echo "✗ SimSun 未安装"; check_status=1; }
+        fc-match "SimSun" | grep -qi "SimSun" && echo "✓ SimSun 已安装" || { fc-match "Noto Sans CJK SC" | grep -qi "Noto" && echo "✓ Noto CJK 已安装 (SimSun 后备)"; } || { echo "✗ 中文字体未安装"; check_status=1; }
         kpsewhich simkai.ttf >/dev/null && echo "✓ simkai.ttf 已加入 TeX Live 字体树" || { echo "✗ simkai.ttf 未加入 TeX Live 字体树"; check_status=1; }
         [ "$install_status" -eq 0 ] && [ "$check_status" -eq 0 ]
     '
@@ -1259,8 +1183,8 @@ install_fonts() {
             *) echo -e "${RED}无效选择!${NC}"; continue ;;
         esac
         
-        # 刷新字体缓存
-        docker exec "$SHARELATEX_CONTAINER" bash -c 'command -v fc-cache >/dev/null || (apt-get update && apt-get install -y fontconfig); fc-cache -fv' >/dev/null || {
+        # 刷新字体缓存和 XeLaTeX/LuaLaTeX 字体数据库
+        docker exec "$SHARELATEX_CONTAINER" bash -c 'command -v fc-cache >/dev/null || (apt-get update && apt-get install -y fontconfig); fc-cache -fv; luaotfload-tool --update --quiet 2>/dev/null || true' >/dev/null || {
             echo -e "${RED}✗ 字体缓存刷新失败${NC}"
             return 1
         }
@@ -1285,15 +1209,16 @@ install_default_fonts() {
     }
 
     docker exec "$SHARELATEX_CONTAINER" bash -c '
-        set -e
         export DEBIAN_FRONTEND=noninteractive
-        command -v fc-cache >/dev/null || apt-get update
         echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula boolean true" | debconf-set-selections
         apt-get update
         apt-get install -y fontconfig cabextract xfonts-utils ttf-mscorefonts-installer fonts-noto-cjk fonts-noto
         fc-cache -fv >/dev/null 2>&1 || true
-        fc-match "Times New Roman" >/dev/null
-        fc-match "Noto Sans CJK SC" >/dev/null || fc-match "Noto Sans CJK" >/dev/null
+        luaotfload-tool --update --quiet 2>/dev/null || true
+        check_status=0
+        fc-match "Times New Roman" >/dev/null || { echo "✗ Times New Roman 未安装"; check_status=1; }
+        fc-match "Noto Sans CJK SC" >/dev/null || fc-match "Noto Sans CJK" >/dev/null || { echo "✗ Noto CJK 未安装"; check_status=1; }
+        [ "$check_status" -eq 0 ]
     ' || {
         echo -e "${RED}✗ 推荐字体包安装失败${NC}"
         return 1

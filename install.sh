@@ -1,5 +1,5 @@
 #!/bin/bash
-# OVERSEI Installer v5.5
+# OVERSEI Installer v5.6
 # GitHub: https://github.com/AMTOPA/Overleaf-Sharelatex-Easy-Install  
 
 # 发送 API 计数请求（静默模式，不影响脚本执行）
@@ -10,6 +10,8 @@ RED='\033[1;31m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'
 BLUE='\033[1;34m'; CYAN='\033[1;36m'; NC='\033[0m'
 MIN_MONGO_VERSION="8.0"
 DEFAULT_MONGO_VERSION="8.0"
+DEFAULT_OVERLEAF_PORT="${OVERSEI_PORT:-8888}"
+OVERLEAF_PORT="$DEFAULT_OVERLEAF_PORT"
 INSTALL_DIR="/root/overleaf"
 TOOLKIT_DIR="$INSTALL_DIR/overleaf-toolkit"
 AUTO_MODE="${AUTO_MODE:-0}"
@@ -52,6 +54,102 @@ set_rc_value() {
     fi
 }
 
+is_valid_port() {
+    local port="$1"
+
+    [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
+}
+
+get_docker_port_owner() {
+    local port="$1"
+
+    docker ps --format '{{.ID}}|{{.Names}}|{{.Image}}|{{.Ports}}' 2>/dev/null |
+        awk -F'|' -v port="$port" '
+            index($4, ":" port "->") || index($4, ":::" port "->") || index($4, "[::]:" port "->") {
+                print
+                exit
+            }
+        '
+}
+
+is_port_in_use() {
+    local port="$1"
+
+    [ -n "$(get_docker_port_owner "$port")" ] && return 0
+
+    if command -v ss &>/dev/null; then
+        ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(:|\\])${port}$" && return 0
+    elif command -v netstat &>/dev/null; then
+        netstat -ltn 2>/dev/null | awk 'NR > 2 {print $4}' | grep -Eq "(:|\\])${port}$" && return 0
+    fi
+
+    return 1
+}
+
+choose_available_overleaf_port() {
+    local requested_port="$1"
+    local port
+
+    for port in "$requested_port" $(seq 8889 8999); do
+        if ! is_port_in_use "$port"; then
+            echo "$port"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+ensure_overleaf_port_available() {
+    local requested_port="${1:-$DEFAULT_OVERLEAF_PORT}"
+    local owner
+    local owner_id
+    local owner_name
+    local owner_image
+    local next_port
+
+    if ! is_valid_port "$requested_port"; then
+        echo -e "${YELLOW}⚠ OVERSEI_PORT 无效，使用默认端口 8888${NC}"
+        requested_port="8888"
+    fi
+
+    owner=$(get_docker_port_owner "$requested_port")
+    if [ -n "$owner" ]; then
+        owner_id=$(printf '%s' "$owner" | cut -d'|' -f1)
+        owner_name=$(printf '%s' "$owner" | cut -d'|' -f2)
+        owner_image=$(printf '%s' "$owner" | cut -d'|' -f3)
+
+        if [ "$owner_name" = "sharelatex" ]; then
+            OVERLEAF_PORT="$requested_port"
+            echo -e "${GREEN}✓ 端口 ${OVERLEAF_PORT} 已由当前 sharelatex 容器使用，继续复用${NC}"
+            return 0
+        fi
+
+        if printf '%s\n%s\n' "$owner_name" "$owner_image" | grep -Eqi 'sharelatex|overleaf|oversei'; then
+            echo -e "${YELLOW}⚠ 端口 ${requested_port} 被旧 Overleaf/ShareLaTeX 容器 ${owner_name} 占用，正在移除...${NC}"
+            docker rm -f "$owner_id" >/dev/null 2>&1 || {
+                echo -e "${RED}✗ 无法移除占用端口的旧容器 ${owner_name}${NC}"
+                return 1
+            }
+            sleep 2
+        else
+            echo -e "${YELLOW}⚠ 端口 ${requested_port} 已被其他容器 ${owner_name} 占用，自动寻找可用端口${NC}"
+        fi
+    fi
+
+    if is_port_in_use "$requested_port"; then
+        next_port=$(choose_available_overleaf_port "$requested_port") || {
+            echo -e "${RED}✗ 未找到可用端口，请释放 8888-8999 范围内的端口后重试${NC}"
+            return 1
+        }
+        OVERLEAF_PORT="$next_port"
+        echo -e "${YELLOW}→ Overleaf 将改用端口 ${OVERLEAF_PORT}${NC}"
+    else
+        OVERLEAF_PORT="$requested_port"
+        echo -e "${GREEN}✓ Overleaf 端口 ${OVERLEAF_PORT} 可用${NC}"
+    fi
+}
+
 select_latest_mongo_version() {
     local latest_tag
 
@@ -85,18 +183,18 @@ choose_deployment_type() {
 
     case "$choice" in
         1)
-            ACCESS_URL="http://localhost:8888"
+            ACCESS_URL="http://localhost:${OVERLEAF_PORT}"
             LISTEN_IP="127.0.0.1"
             ;;
         2)
             PUBLIC_IP=$(curl -s ifconfig.me)
-            ACCESS_URL="http://${PUBLIC_IP}:8888"
+            ACCESS_URL="http://${PUBLIC_IP}:${OVERLEAF_PORT}"
             LISTEN_IP="0.0.0.0"
             ;;
         *)
             echo -e "${YELLOW}⚠ 无效选项，使用默认服务器部署${NC}"
             PUBLIC_IP=$(curl -s ifconfig.me)
-            ACCESS_URL="http://${PUBLIC_IP}:8888"
+            ACCESS_URL="http://${PUBLIC_IP}:${OVERLEAF_PORT}"
             LISTEN_IP="0.0.0.0"
             ;;
     esac
@@ -119,6 +217,14 @@ ensure_dependencies() {
         echo -e "${YELLOW}▶ 安装依赖: docker compose...${NC}"
         apt-get update && (apt-get install -y docker-compose-plugin || apt-get install -y docker-compose) || {
             echo -e "${RED}✗ 安装 docker compose 失败!${NC}"
+            return 1
+        }
+    fi
+
+    if ! command -v ss &>/dev/null && ! command -v netstat &>/dev/null; then
+        echo -e "${YELLOW}▶ 安装依赖: iproute2（用于端口检测）...${NC}"
+        apt-get update && apt-get install -y iproute2 || {
+            echo -e "${RED}✗ 安装 iproute2 失败!${NC}"
             return 1
         }
     fi
@@ -368,7 +474,7 @@ show_access_urls() {
             *" $host "*) continue ;;
         esac
         seen_hosts="${seen_hosts}${host} "
-        print_url_group "$host" "8888"
+        print_url_group "$host" "$OVERLEAF_PORT"
     done
 
     {
@@ -493,7 +599,7 @@ cat << "EOF"
  ╚═════╝   ╚═══╝  ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝
 EOF
 
-echo -e "${CYAN}:: OVERSEI - Overleaf/ShareLaTeX Easy Installer v5.5 ::${NC}\n"
+echo -e "${CYAN}:: OVERSEI - Overleaf/ShareLaTeX Easy Installer v5.6 ::${NC}\n"
 
 # Check root
 [ "$(id -u)" != "0" ] && echo -e "${RED}✗ 请使用root用户运行!${NC}" && exit 1
@@ -547,10 +653,12 @@ install_base() {
         return 1
     fi
 
+    ensure_overleaf_port_available "$DEFAULT_OVERLEAF_PORT" || return 1
+
     # Essential configs - 使用用户选择的MONGO_VERSION
     echo -e "${GREEN}✓ 设置 MongoDB 版本为: ${MONGO_VERSION}${NC}"
     set_rc_value "OVERLEAF_LISTEN_IP" "$LISTEN_IP" "config/overleaf.rc"
-    set_rc_value "OVERLEAF_PORT" "8888" "config/overleaf.rc"
+    set_rc_value "OVERLEAF_PORT" "$OVERLEAF_PORT" "config/overleaf.rc"
     set_rc_value "MONGO_VERSION" "$MONGO_VERSION" "config/overleaf.rc"
     set_rc_value "SIBLING_CONTAINERS_ENABLED" "false" "config/overleaf.rc"
     configure_chinese_ui || return 1
@@ -944,23 +1052,7 @@ repair_installation() {
     fi
 
     echo -e "${YELLOW}▶ 正在修复核心配置...${NC}"
-    set_rc_value "OVERLEAF_LISTEN_IP" "$LISTEN_IP" "config/overleaf.rc"
-    set_rc_value "OVERLEAF_PORT" "8888" "config/overleaf.rc"
-    set_rc_value "MONGO_VERSION" "$MONGO_VERSION" "config/overleaf.rc"
-    set_rc_value "SIBLING_CONTAINERS_ENABLED" "false" "config/overleaf.rc"
-    configure_chinese_ui || return 1
-    ensure_amd64_emulation || return 1
-    configure_arm64_compose_override || return 1
-
-    echo -e "${YELLOW}▶ 正在重新启动/修复基础服务...${NC}"
-    bin/up -d || {
-        echo -e "${RED}✗ 服务启动失败!${NC}"
-        show_compose_logs "mongo"
-        show_compose_logs "sharelatex"
-        return 1
-    }
-
-    echo -e "${GREEN}✓ 修复完成，正在检查服务状态...${NC}"
+    echo -e "${GREEN}✓ 将通过基础服务安装流程统一修复配置、端口和服务状态${NC}"
     install_base
 }
 

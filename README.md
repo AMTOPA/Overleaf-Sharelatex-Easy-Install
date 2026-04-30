@@ -26,6 +26,7 @@
 - 📦 **LaTeX package installer** for full scheme, common thesis-template packages, or custom `tlmgr` package names, including `collection-latexextra`, `multirow`/`bigstrut`, `cprotect`, and common CUMCM-style dependencies.
 - 🧱 **Optional custom image persistence** after installing Chinese support, fonts, or packages, preventing container recreation from losing `ctex.sty` or other installed files after you confirm your templates compile correctly.
 - 🛠️ **Automatic repair mode** for existing `overleaf-toolkit` checkouts, partial `config` directories, MongoDB version settings, ARM64 overrides, and service startup issues.
+- 🔌 **Port conflict handling**: if `8888` is used by an old Overleaf container, it is removed; if another service owns it, OVERSEI automatically selects an available port from `8889-8999`.
 
 ---
 
@@ -46,7 +47,8 @@ bash <(curl -sL --connect-timeout 10 https://raw.githubusercontent.com/AMTOPA/Ov
 - Docker and Docker Compose. The installer can install missing Compose support when possible.
 - ARM64/aarch64 servers are supported through `linux/amd64` compatibility mode for the ShareLaTeX CE image, which is usually slower than native x86_64.
 - Network access to GitHub, Docker Hub, Ubuntu package mirrors, and CTAN/TUNA mirrors.
-- Port `8888` available unless you edit the generated Overleaf Toolkit configuration manually.
+- Port `8888` is used by default.
+- If `8888` is already occupied, the installer automatically selects an available port from `8889-8999`. You can also set `OVERSEI_PORT=8890` before running the script to prefer a specific port.
 
 ### 3. Installation Options
 
@@ -146,7 +148,7 @@ It must be `8.0` or newer.
 
 ### ARM64 servers report `no matching manifest for linux/arm64/v8`
 
-Rerun the install command with v5.5 or newer. The installer generates:
+Rerun the install command with v5.6 or newer. The installer generates:
 
 ```yaml
 services:
@@ -163,6 +165,10 @@ Run the Chinese support or package installer again. OVERSEI will detect the TeX 
 ### Re-running reports `ERROR: Config files already exist, exiting`
 
 This is Overleaf Toolkit refusing to run `bin/init` when a `config` directory already exists. Since v5.5, OVERSEI detects an existing `config/overleaf.rc` and skips `bin/init`; if `config` is incomplete, it is backed up to `config.bak.<timestamp>` before reinitialization. Rerun the installer and choose automatic repair.
+
+### Startup reports `Bind for 0.0.0.0:8888 failed: port is already allocated`
+
+The host port `8888` is already occupied. Since v5.6, OVERSEI checks the port before startup: old Overleaf/ShareLaTeX containers are removed automatically, while unrelated services cause the installer to switch to the next available port and print the actual access URL at the end.
 
 ### `ctex.sty`, `cprotect.sty`, `suffix.sty`, or other `.sty` files are missing
 
@@ -192,8 +198,9 @@ docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
 - Default external access URL:
   - Local deployment: `http://localhost:8888`
   - Server deployment: `http://<server-ip>:8888`
-- First-time admin setup URL: `http://<ip>:8888/launchpad`.
-- Login URL after initialization: `http://<ip>:8888/login`.
+- If `8888` is occupied, use the actual port printed by the installer.
+- First-time admin setup URL: `http://<ip>:<actual-port>/launchpad`.
+- Login URL after initialization: `http://<ip>:<actual-port>/login`.
 - After base service installation, the installer prints candidate URLs for the public IP, host IP addresses, `localhost`, `127.0.0.1`, and Docker internal container IP addresses when available. Docker internal URLs normally use port `80` and are usually reachable only from the host or Docker networks.
 
 ---

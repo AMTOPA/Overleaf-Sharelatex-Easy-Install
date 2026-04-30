@@ -26,6 +26,7 @@
 - 📦 **LaTeX 宏包安装器**，支持完整宏包、常用论文模板宏包和自定义 `tlmgr` 包名，并包含 `collection-latexextra`、`multirow`/`bigstrut`、`cprotect` 以及 CUMCM 模板常见依赖。
 - 🧱 **可选自定义镜像持久化**，安装中文支持、字体或宏包后，可在确认模板能正常编译后再固化当前容器，避免容器重建后丢失 `ctex.sty` 等已安装文件。
 - 🛠️ **自动修复现有安装**，可检测并修复已存在的 `overleaf-toolkit`、残缺 `config`、MongoDB 版本、ARM64 override 和服务启动问题。
+- 🔌 **端口冲突自动处理**，`8888` 被旧 Overleaf 容器占用时会清理旧容器，被其他服务占用时自动切换到 `8889-8999` 内的可用端口。
 
 ---
 
@@ -46,7 +47,8 @@ bash <(curl -sL --connect-timeout 10 https://raw.githubusercontent.com/AMTOPA/Ov
 - Docker 与 Docker Compose。缺少 Compose 支持时，脚本会尽量自动安装。
 - ARM64/aarch64 服务器可以部署，但 ShareLaTeX 官方 CE 镜像会通过 `linux/amd64` 兼容模式运行，性能通常低于 x86_64 原生服务器。
 - 能访问 GitHub、Docker Hub、Ubuntu 软件源以及 CTAN/清华镜像源。
-- 默认使用 `8888` 端口。如需修改端口，可在生成 Overleaf Toolkit 配置后手动调整。
+- 默认使用 `8888` 端口。
+- 如果 `8888` 已被其他服务占用，脚本会自动选择 `8889-8999` 范围内的可用端口。也可以运行前设置 `OVERSEI_PORT=8890` 指定首选端口。
 
 ### 3. 安装选项
 
@@ -146,7 +148,7 @@ grep '^MONGO_VERSION=' /root/overleaf/overleaf-toolkit/config/overleaf.rc
 
 ### ARM64 服务器提示 `no matching manifest for linux/arm64/v8`
 
-请使用 v5.5 或更新的安装脚本重新运行安装命令。脚本会自动生成：
+请使用 v5.6 或更新的安装脚本重新运行安装命令。脚本会自动生成：
 
 ```yaml
 services:
@@ -163,6 +165,10 @@ services:
 ### 重新运行时报 `ERROR: Config files already exist, exiting`
 
 这是 Overleaf Toolkit 在已有 `config` 目录时拒绝重复初始化。v5.5 起 OVERSEI 会自动识别已有 `config/overleaf.rc` 并跳过 `bin/init`；如果 `config` 是半初始化状态，会先备份为 `config.bak.<时间戳>` 再重新初始化。遇到这种情况直接重跑脚本并选择“自动检测并修复现有安装”。
+
+### 启动时报 `Bind for 0.0.0.0:8888 failed: port is already allocated`
+
+说明宿主机 `8888` 已被占用。v5.6 起脚本会在启动前检测端口：如果是旧 Overleaf/ShareLaTeX 容器占用，会自动移除旧容器；如果是其他服务占用，会自动切换到下一个可用端口并在安装完成后输出实际访问地址。
 
 ### 缺少 `ctex.sty`、`cprotect.sty`、`suffix.sty` 或其他 `.sty` 文件
 
@@ -192,8 +198,9 @@ docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
 - 默认外部访问地址：
   - 本地部署：`http://localhost:8888`
   - 服务器部署：`http://<server-ip>:8888`
-- 首次管理员初始化地址：`http://<ip>:8888/launchpad`。
-- 初始化后的登录地址：`http://<ip>:8888/login`。
+- 如果 `8888` 被占用，请以脚本输出的实际端口为准。
+- 首次管理员初始化地址：`http://<ip>:<实际端口>/launchpad`。
+- 初始化后的登录地址：`http://<ip>:<实际端口>/login`。
 - 基础服务安装成功后，脚本会自动输出公网 IP、宿主机 IP、`localhost`、`127.0.0.1`，以及可检测到的 Docker 容器内部 IP 候选地址。Docker 内部地址通常使用 `80` 端口，一般只适合宿主机或 Docker 网络内部访问。
 
 ---

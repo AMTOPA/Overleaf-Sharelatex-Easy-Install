@@ -114,6 +114,8 @@ no matching manifest for linux/arm64/v8 in the manifest list entries
 OVERSEI 会在 ARM64 主机上自动：
 
 - 安装 `qemu-user-static` 与 `binfmt-support`。
+- 挂载并启用 `qemu-x86_64` 的 `binfmt_misc`；如果系统服务没有注册成功，会自动通过特权 Docker 容器注册 binfmt。
+- 如果 amd64 模拟仍不可用，会在启动 ShareLaTeX 前中止，避免反复出现 `exec /sbin/my_init: exec format error` 重启。
 - 在 `config/docker-compose.override.yml` 写入 `sharelatex.platform=linux/amd64`。
 - 让 MongoDB/Redis 继续使用原生 ARM64 镜像，只有 ShareLaTeX 走 amd64 兼容模式。
 

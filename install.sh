@@ -1,5 +1,5 @@
 #!/bin/bash
-# OVERSEI Installer v5.8
+# OVERSEI Installer v5.9
 # GitHub: https://github.com/AMTOPA/Overleaf-Sharelatex-Easy-Install  
 
 send_usage_counter() {
@@ -292,6 +292,13 @@ ensure_amd64_emulation() {
         }
     fi
 
+    if [ ! -d /proc/sys/fs/binfmt_misc ]; then
+        mkdir -p /proc/sys/fs/binfmt_misc >/dev/null 2>&1 || true
+    fi
+    if [ ! -f /proc/sys/fs/binfmt_misc/register ]; then
+        mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc >/dev/null 2>&1 || true
+    fi
+
     if command -v update-binfmts &>/dev/null; then
         update-binfmts --enable qemu-x86_64 >/dev/null 2>&1 || true
     fi
@@ -300,11 +307,18 @@ ensure_amd64_emulation() {
         systemctl restart systemd-binfmt >/dev/null 2>&1 || true
     fi
 
-    if [ -f /proc/sys/fs/binfmt_misc/qemu-x86_64 ]; then
+    if [ ! -f /proc/sys/fs/binfmt_misc/qemu-x86_64 ] || ! grep -qi enabled /proc/sys/fs/binfmt_misc/qemu-x86_64 2>/dev/null; then
+        echo -e "${YELLOW}▶ 正在通过 Docker 注册 amd64 binfmt 模拟器...${NC}"
+        docker run --privileged --rm tonistiigi/binfmt --install amd64 >/dev/null 2>&1 ||
+        docker run --privileged --rm multiarch/qemu-user-static --reset -p yes >/dev/null 2>&1 || true
+    fi
+
+    if [ -f /proc/sys/fs/binfmt_misc/qemu-x86_64 ] && grep -qi enabled /proc/sys/fs/binfmt_misc/qemu-x86_64 2>/dev/null; then
         echo -e "${GREEN}✓ amd64 容器兼容支持已启用${NC}"
     else
-        echo -e "${YELLOW}⚠ 未检测到 qemu-x86_64 binfmt 注册项，Docker 可能无法启动 amd64 ShareLaTeX 容器${NC}"
-        echo -e "${YELLOW}   如果后续启动失败，请执行: systemctl restart systemd-binfmt && docker run --rm --platform linux/amd64 hello-world${NC}"
+        echo -e "${RED}✗ amd64 binfmt 模拟器未启用，继续启动会出现 exec /sbin/my_init: exec format error${NC}"
+        echo -e "${YELLOW}   可手动执行: docker run --privileged --rm tonistiigi/binfmt --install amd64${NC}"
+        return 1
     fi
 }
 
@@ -911,7 +925,7 @@ print_banner() {
  ╚═════╝   ╚═══╝  ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝
 EOF
 
-    echo -e "${CYAN}:: OVERSEI - Overleaf/ShareLaTeX Easy Installer v5.8 ::${NC}\n"
+    echo -e "${CYAN}:: OVERSEI - Overleaf/ShareLaTeX Easy Installer v5.9 ::${NC}\n"
 }
 
 # Main Menu

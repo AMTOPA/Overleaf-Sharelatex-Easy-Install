@@ -1,5 +1,5 @@
 #!/bin/bash
-# OVERSEI Installer v5.6
+# OVERSEI Installer v5.7
 # GitHub: https://github.com/AMTOPA/Overleaf-Sharelatex-Easy-Install  
 
 # 发送 API 计数请求（静默模式，不影响脚本执行）
@@ -187,14 +187,18 @@ choose_deployment_type() {
             LISTEN_IP="127.0.0.1"
             ;;
         2)
-            PUBLIC_IP=$(curl -s ifconfig.me)
-            ACCESS_URL="http://${PUBLIC_IP}:${OVERLEAF_PORT}"
+            PUBLIC_IPV4=$(detect_public_ipv4)
+            PUBLIC_IPV6=$(detect_public_ipv6)
+            PUBLIC_IP="${PUBLIC_IPV4:-$PUBLIC_IPV6}"
+            ACCESS_URL="http://$(format_url_host "$PUBLIC_IP"):${OVERLEAF_PORT}"
             LISTEN_IP="0.0.0.0"
             ;;
         *)
             echo -e "${YELLOW}⚠ 无效选项，使用默认服务器部署${NC}"
-            PUBLIC_IP=$(curl -s ifconfig.me)
-            ACCESS_URL="http://${PUBLIC_IP}:${OVERLEAF_PORT}"
+            PUBLIC_IPV4=$(detect_public_ipv4)
+            PUBLIC_IPV6=$(detect_public_ipv6)
+            PUBLIC_IP="${PUBLIC_IPV4:-$PUBLIC_IPV6}"
+            ACCESS_URL="http://$(format_url_host "$PUBLIC_IP"):${OVERLEAF_PORT}"
             LISTEN_IP="0.0.0.0"
             ;;
     esac
@@ -421,6 +425,112 @@ show_compose_logs() {
     fi
 }
 
+read_rc_value() {
+    local key="$1"
+    local file="$2"
+
+    [ -f "$file" ] || return 1
+    grep -E "^${key}=" "$file" | tail -1 | cut -d= -f2-
+}
+
+is_ipv4() {
+    local ip="$1"
+    local IFS=.
+    local a b c d
+
+    [[ "$ip" =~ ^[0-9]+(\.[0-9]+){3}$ ]] || return 1
+    read -r a b c d <<< "$ip"
+    for octet in "$a" "$b" "$c" "$d"; do
+        [ "$octet" -ge 0 ] 2>/dev/null && [ "$octet" -le 255 ] 2>/dev/null || return 1
+    done
+}
+
+is_ipv6() {
+    local ip="$1"
+
+    [[ "$ip" == *:* ]] && [[ "$ip" =~ ^[0-9A-Fa-f:]+$ ]]
+}
+
+is_valid_host() {
+    local host="$1"
+
+    [ -z "$host" ] && return 1
+    [[ "$host" =~ [[:space:]] ]] && return 1
+    [ "$host" = "invalid" ] && return 1
+    [ "$host" = "invalid IP" ] && return 1
+    is_ipv4 "$host" || is_ipv6 "$host" || [ "$host" = "localhost" ]
+}
+
+is_private_ipv4() {
+    local ip="$1"
+    local IFS=.
+    local a b c d
+
+    is_ipv4 "$ip" || return 1
+    read -r a b c d <<< "$ip"
+    [ "$a" -eq 10 ] && return 0
+    [ "$a" -eq 127 ] && return 0
+    [ "$a" -eq 169 ] && [ "$b" -eq 254 ] && return 0
+    [ "$a" -eq 172 ] && [ "$b" -ge 16 ] && [ "$b" -le 31 ] && return 0
+    [ "$a" -eq 192 ] && [ "$b" -eq 168 ] && return 0
+    return 1
+}
+
+format_url_host() {
+    local host="$1"
+
+    if is_ipv6 "$host"; then
+        printf '[%s]' "$host"
+    else
+        printf '%s' "$host"
+    fi
+}
+
+detect_public_ipv4() {
+    local ip
+
+    ip=$(curl -4 -fsSL --connect-timeout 5 https://api.ipify.org 2>/dev/null ||
+        curl -4 -fsSL --connect-timeout 5 https://ipv4.icanhazip.com 2>/dev/null ||
+        true)
+    ip=$(printf '%s' "$ip" | tr -d '[:space:]')
+    if is_ipv4 "$ip" && ! is_private_ipv4 "$ip"; then
+        echo "$ip"
+    fi
+}
+
+detect_public_ipv6() {
+    local ip
+
+    ip=$(curl -6 -fsSL --connect-timeout 5 https://api64.ipify.org 2>/dev/null ||
+        curl -6 -fsSL --connect-timeout 5 https://ipv6.icanhazip.com 2>/dev/null ||
+        true)
+    ip=$(printf '%s' "$ip" | tr -d '[:space:]')
+    if is_ipv6 "$ip"; then
+        echo "$ip"
+    fi
+}
+
+load_runtime_config() {
+    local rc_file="$TOOLKIT_DIR/config/overleaf.rc"
+    local configured_port
+    local configured_ip
+
+    configured_port=$(read_rc_value "OVERLEAF_PORT" "$rc_file" 2>/dev/null || true)
+    if is_valid_port "$configured_port"; then
+        OVERLEAF_PORT="$configured_port"
+    fi
+
+    configured_ip=$(read_rc_value "OVERLEAF_LISTEN_IP" "$rc_file" 2>/dev/null || true)
+    if [ -n "$configured_ip" ]; then
+        LISTEN_IP="$configured_ip"
+    elif [ -z "${LISTEN_IP:-}" ]; then
+        LISTEN_IP="0.0.0.0"
+    fi
+
+    PUBLIC_IPV4=$(detect_public_ipv4)
+    PUBLIC_IPV6=$(detect_public_ipv6)
+}
+
 prepare_tlmgr() {
     local container="$1"
     local current_repo="https://mirrors.tuna.tsinghua.edu.cn/CTAN/systems/texlive/tlnet"
@@ -448,9 +558,11 @@ print_url_group() {
     local host="$1"
     local port="$2"
     local base_url
+    local url_host
 
-    [ -z "$host" ] && return 0
-    base_url="http://${host}:${port}"
+    is_valid_host "$host" || return 0
+    url_host=$(format_url_host "$host")
+    base_url="http://${url_host}:${port}"
     echo -e "${CYAN}- ${base_url}${NC}"
     echo -e "  管理员初始化: ${base_url}/launchpad"
     echo -e "  登录地址:     ${base_url}/login"
@@ -459,40 +571,52 @@ print_url_group() {
 show_access_urls() {
     local sharelatex_container="$1"
     local seen_hosts=" "
-    local seen_docker_hosts=" "
     local host
-    local docker_ip
-    local printed_docker=0
+    local printed_external=0
+    local printed_lan=0
 
-    echo -e "${GREEN}✓ 基础服务安装完成!${NC}"
-    echo -e "${BLUE}访问地址汇总:${NC}"
+    load_runtime_config
+    echo -e "${BLUE}推荐访问地址:${NC}"
     echo -e "${YELLOW}首次使用请先打开管理员初始化地址创建管理员账号，之后使用登录地址进入系统。${NC}"
 
-    for host in "${PUBLIC_IP:-}" $(hostname -I 2>/dev/null) localhost 127.0.0.1; do
-        [ -z "$host" ] && continue
-        case "$seen_hosts" in
-            *" $host "*) continue ;;
-        esac
+    for host in "${PUBLIC_IPV4:-}" "${PUBLIC_IPV6:-}"; do
+        is_valid_host "$host" || continue
+        case "$seen_hosts" in *" $host "*) continue ;; esac
         seen_hosts="${seen_hosts}${host} "
+        print_url_group "$host" "$OVERLEAF_PORT"
+        printed_external=1
+    done
+
+    if [ -z "${PUBLIC_IPV4:-}" ]; then
+        echo -e "${YELLOW}⚠ 未检测到公网 IPv4；如果云服务器应有 IPv4，请检查公网 IP 绑定、安全组和防火墙。${NC}"
+    fi
+    if [ "$printed_external" -eq 0 ]; then
+        echo -e "${YELLOW}⚠ 未检测到公网访问地址，当前仅显示内网/本机地址。${NC}"
+    fi
+
+    for host in $(ip -o -4 addr show scope global 2>/dev/null | awk '$2 !~ /^(docker|br-|veth)/ {split($4,a,"/"); print a[1]}'); do
+        is_ipv4 "$host" || continue
+        case "$seen_hosts" in *" $host "*) continue ;; esac
+        seen_hosts="${seen_hosts}${host} "
+        if [ "$printed_lan" -eq 0 ]; then
+            echo -e "${BLUE}内网/宿主机地址:${NC}"
+            printed_lan=1
+        fi
         print_url_group "$host" "$OVERLEAF_PORT"
     done
 
-    {
-        docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{"\n"}}{{end}}' "$sharelatex_container" 2>/dev/null
-        docker exec "$sharelatex_container" hostname -I 2>/dev/null | tr ' ' '\n'
-        docker exec "$sharelatex_container" bash -c "ip -o -4 addr show scope global 2>/dev/null | awk '{split(\$4,a,\"/\"); print a[1]}'" 2>/dev/null
-    } | while IFS= read -r docker_ip; do
-        [ -z "$docker_ip" ] && continue
-        case "$seen_docker_hosts" in
-            *" $docker_ip "*) continue ;;
-        esac
-        seen_docker_hosts="${seen_docker_hosts}${docker_ip} "
-        if [ "$printed_docker" -eq 0 ]; then
-            echo -e "${YELLOW}Docker 内部地址（通常仅宿主机或 Docker 网络内可访问）:${NC}"
-            printed_docker=1
-        fi
-        print_url_group "$docker_ip" "80"
-    done
+    echo -e "${BLUE}本机地址:${NC}"
+    print_url_group "localhost" "$OVERLEAF_PORT"
+    print_url_group "127.0.0.1" "$OVERLEAF_PORT"
+
+    if [ "${OVERSEI_SHOW_INTERNAL_URLS:-0}" = "1" ] && [ -n "$sharelatex_container" ]; then
+        echo -e "${YELLOW}Docker 内部地址（通常仅宿主机或 Docker 网络内可访问）:${NC}"
+        docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{"\n"}}{{end}}' "$sharelatex_container" 2>/dev/null |
+            while IFS= read -r host; do
+                is_ipv4 "$host" || continue
+                print_url_group "$host" "80"
+            done
+    fi
 }
 
 configure_chinese_ui() {
@@ -590,7 +714,8 @@ recreate_sharelatex_container() {
     }
 }
 
-cat << "EOF"
+print_banner() {
+    cat << "EOF"
  ██████╗ ██╗   ██╗███████╗██████╗ ███████╗███████╗██╗
 ██╔═══██╗██║   ██║██╔════╝██╔══██╗██╔════╝██╔════╝██║
 ██║   ██║██║   ██║█████╗  ██████╔╝███████╗█████╗  ██║
@@ -599,13 +724,8 @@ cat << "EOF"
  ╚═════╝   ╚═══╝  ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝
 EOF
 
-echo -e "${CYAN}:: OVERSEI - Overleaf/ShareLaTeX Easy Installer v5.6 ::${NC}\n"
-
-# Check root
-[ "$(id -u)" != "0" ] && echo -e "${RED}✗ 请使用root用户运行!${NC}" && exit 1
-
-choose_deployment_type
-select_latest_mongo_version
+    echo -e "${CYAN}:: OVERSEI - Overleaf/ShareLaTeX Easy Installer v5.7 ::${NC}\n"
+}
 
 # Main Menu
 show_menu() {
@@ -1136,5 +1256,216 @@ install_packages() {
     done
 }
 
-# Main Flow
-show_menu
+install_cli_command() {
+    local lib_dir="/usr/local/lib/oversei"
+    local script_target="$lib_dir/install.sh"
+    local wrapper="/usr/local/bin/oversei"
+    local source_script="${BASH_SOURCE[0]}"
+
+    mkdir -p "$lib_dir" || return 1
+    if [ "$source_script" != "$script_target" ]; then
+        cp "$source_script" "$script_target" 2>/dev/null || {
+            echo -e "${YELLOW}⚠ 无法保存本地 OVERSEI 脚本副本，命令行工具安装跳过${NC}"
+            return 0
+        }
+        chmod 755 "$script_target" || true
+    fi
+
+    cat > "$wrapper" <<'EOF'
+#!/bin/bash
+exec /usr/local/lib/oversei/install.sh "$@"
+EOF
+    chmod 755 "$wrapper" || true
+    ln -sf "$wrapper" /usr/local/bin/OVERSEI 2>/dev/null || true
+    echo -e "${GREEN}✓ 本地命令已安装: oversei / OVERSEI${NC}"
+}
+
+show_cli_help() {
+    cat <<'EOF'
+OVERSEI local command
+
+Usage:
+  oversei --help | -h          Show this help
+  oversei menu                 Open the interactive installer menu
+  oversei urls [--all]         Show clean access URLs; --all also shows Docker internal URLs
+  oversei status               Show container and toolkit status
+  oversei config               Show key Toolkit config values
+  oversei repair               Detect and repair the existing installation
+  oversei base                 Install or repair base services
+  oversei full                 Run recommended full installation
+  oversei chinese              Install Chinese UI/typesetting support
+  oversei fonts                Open font installer
+  oversei packages             Open LaTeX package installer
+  oversei logs [service]       Show recent logs, default service: sharelatex
+  oversei restart              Restart Overleaf services
+  oversei stop                 Stop Overleaf services
+
+Examples:
+  oversei urls
+  oversei packages
+  OVERSEI repair
+EOF
+}
+
+show_status() {
+    load_runtime_config
+    echo -e "${BLUE}OVERSEI 状态:${NC}"
+    echo "Toolkit: $TOOLKIT_DIR"
+    echo "Port: ${OVERLEAF_PORT}"
+    if [ -f "$TOOLKIT_DIR/config/overleaf.rc" ]; then
+        echo "MongoDB: $(read_rc_value "MONGO_VERSION" "$TOOLKIT_DIR/config/overleaf.rc")"
+        echo "Listen IP: $(read_rc_value "OVERLEAF_LISTEN_IP" "$TOOLKIT_DIR/config/overleaf.rc")"
+    fi
+    docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null || true
+}
+
+show_config_summary() {
+    local rc_file="$TOOLKIT_DIR/config/overleaf.rc"
+    local variables_file="$TOOLKIT_DIR/config/variables.env"
+
+    echo -e "${BLUE}配置文件:${NC}"
+    echo "Toolkit: $TOOLKIT_DIR"
+    echo "overleaf.rc: $rc_file"
+    echo "variables.env: $variables_file"
+    if [ -f "$rc_file" ]; then
+        echo -e "${BLUE}关键配置:${NC}"
+        for key in OVERLEAF_LISTEN_IP OVERLEAF_PORT MONGO_VERSION OVERLEAF_IMAGE_NAME SIBLING_CONTAINERS_ENABLED; do
+            echo "$key=$(read_rc_value "$key" "$rc_file")"
+        done
+    else
+        echo -e "${YELLOW}⚠ 尚未找到 overleaf.rc，请先运行 oversei repair 或 oversei base${NC}"
+    fi
+}
+
+run_toolkit_compose() {
+    if [ ! -d "$TOOLKIT_DIR" ]; then
+        echo -e "${RED}✗ 未找到 Overleaf Toolkit: $TOOLKIT_DIR${NC}"
+        return 1
+    fi
+
+    (
+        cd "$TOOLKIT_DIR" || exit 1
+        if [ -x "bin/docker-compose" ]; then
+            bin/docker-compose "$@"
+        elif docker compose version &>/dev/null; then
+            docker compose "$@"
+        elif command -v docker-compose &>/dev/null; then
+            docker-compose "$@"
+        else
+            exit 1
+        fi
+    )
+}
+
+show_cli_urls() {
+    local show_all="$1"
+    local container
+
+    load_runtime_config
+    container=$(get_container "sharelatex" "sharelatex")
+    if [ "$show_all" = "1" ]; then
+        OVERSEI_SHOW_INTERNAL_URLS=1
+    fi
+    show_access_urls "$container"
+}
+
+require_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo -e "${RED}✗ 请使用 root 用户运行该命令${NC}"
+        exit 1
+    fi
+}
+
+run_cli() {
+    local command="${1:-help}"
+    local service
+
+    case "$command" in
+        -h|--help|help)
+            show_cli_help
+            ;;
+        menu)
+            require_root
+            run_interactive_main
+            ;;
+        urls|url|address|addr)
+            show_cli_urls "$([ "${2:-}" = "--all" ] && echo 1 || echo 0)"
+            ;;
+        status)
+            show_status
+            ;;
+        config)
+            show_config_summary
+            ;;
+        repair)
+            require_root
+            load_runtime_config
+            select_latest_mongo_version
+            repair_installation
+            ;;
+        base)
+            require_root
+            load_runtime_config
+            select_latest_mongo_version
+            install_base
+            ;;
+        full)
+            require_root
+            load_runtime_config
+            select_latest_mongo_version
+            install_full_default
+            ;;
+        chinese)
+            require_root
+            load_runtime_config
+            install_chinese
+            ;;
+        fonts)
+            require_root
+            load_runtime_config
+            install_fonts
+            ;;
+        packages|pkg)
+            require_root
+            load_runtime_config
+            install_packages
+            ;;
+        logs)
+            service="${2:-sharelatex}"
+            if [ -d "$TOOLKIT_DIR" ]; then
+                (cd "$TOOLKIT_DIR" && show_compose_logs "$service")
+            else
+                echo -e "${RED}✗ 未找到 Overleaf Toolkit: $TOOLKIT_DIR${NC}"
+                return 1
+            fi
+            ;;
+        restart)
+            require_root
+            run_toolkit_compose up -d
+            ;;
+        stop)
+            require_root
+            run_toolkit_compose down
+            ;;
+        *)
+            echo -e "${RED}未知命令: $command${NC}"
+            show_cli_help
+            return 1
+            ;;
+    esac
+}
+
+run_interactive_main() {
+    print_banner
+    require_root
+    install_cli_command || true
+    choose_deployment_type
+    select_latest_mongo_version
+    show_menu
+}
+
+if [ "$#" -gt 0 ]; then
+    run_cli "$@"
+else
+    run_interactive_main
+fi

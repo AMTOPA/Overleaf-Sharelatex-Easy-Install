@@ -27,6 +27,7 @@
 - 🧱 **Optional custom image persistence** after installing Chinese support, fonts, or packages, preventing container recreation from losing `ctex.sty` or other installed files after you confirm your templates compile correctly.
 - 🛠️ **Automatic repair mode** for existing `overleaf-toolkit` checkouts, partial `config` directories, MongoDB version settings, ARM64 overrides, and service startup issues.
 - 🔌 **Port conflict handling**: if `8888` is used by an old Overleaf container, it is removed; if another service owns it, OVERSEI automatically selects an available port from `8889-8999`.
+- 🧰 **Local management command**: after installation, use `oversei` or `OVERSEI` to show URLs, status, config, logs, or continue package/font installation.
 
 ---
 
@@ -60,6 +61,30 @@ bash <(curl -sL --connect-timeout 10 https://raw.githubusercontent.com/AMTOPA/Ov
 | Additional Fonts | Windows Core Fonts / Adobe Fonts / Noto CJK / Manual Times New Roman | Expand available fonts in the ShareLaTeX container |
 | LaTeX Packages | `scheme-full` / common thesis-template packages / custom package list | Install packages through `tlmgr`; the common mode includes `collection-latexextra` |
 | Automatic Repair | Existing toolkit/config/container setup | Use this after interrupted installs, partial installs, or repeated runs that hit toolkit initialization errors |
+
+### 4. Local Management Command
+
+The installer writes `/usr/local/bin/oversei` and an uppercase alias `OVERSEI`. After that, you do not need to fetch the installer again:
+
+```bash
+oversei --help
+oversei urls
+oversei status
+oversei packages
+OVERSEI repair
+```
+
+Common commands:
+
+| Command | Description |
+|:--|:--|
+| `oversei urls` | Show clean recommended access URLs |
+| `oversei urls --all` | Also show Docker internal URLs |
+| `oversei status` | Show container and port status |
+| `oversei config` | Show key Toolkit config values |
+| `oversei repair` | Detect and repair an existing installation |
+| `oversei packages` | Open the LaTeX package installer |
+| `oversei logs sharelatex` | Show recent ShareLaTeX logs |
 
 ---
 
@@ -201,7 +226,7 @@ docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
 - If `8888` is occupied, use the actual port printed by the installer.
 - First-time admin setup URL: `http://<ip>:<actual-port>/launchpad`.
 - Login URL after initialization: `http://<ip>:<actual-port>/login`.
-- After base service installation, the installer prints candidate URLs for the public IP, host IP addresses, `localhost`, `127.0.0.1`, and Docker internal container IP addresses when available. Docker internal URLs normally use port `80` and are usually reachable only from the host or Docker networks.
+- After base service installation, the installer prints public URLs, host LAN URLs, `localhost`, and `127.0.0.1` by default. To include Docker internal URLs, run `oversei urls --all`.
 
 ---
 

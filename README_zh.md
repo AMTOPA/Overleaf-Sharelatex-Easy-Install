@@ -27,6 +27,7 @@
 - 🧱 **可选自定义镜像持久化**，安装中文支持、字体或宏包后，可在确认模板能正常编译后再固化当前容器，避免容器重建后丢失 `ctex.sty` 等已安装文件。
 - 🛠️ **自动修复现有安装**，可检测并修复已存在的 `overleaf-toolkit`、残缺 `config`、MongoDB 版本、ARM64 override 和服务启动问题。
 - 🔌 **端口冲突自动处理**，`8888` 被旧 Overleaf 容器占用时会清理旧容器，被其他服务占用时自动切换到 `8889-8999` 内的可用端口。
+- 🧰 **本地管理命令**，安装后可使用 `oversei` 或 `OVERSEI` 查看地址、状态、配置、日志，或继续安装宏包/字体。
 
 ---
 
@@ -60,6 +61,30 @@ bash <(curl -sL --connect-timeout 10 https://raw.githubusercontent.com/AMTOPA/Ov
 | 安装额外字体包 | Windows 核心字体 / Adobe 字体 / 思源字体 / 手动 Times New Roman | 扩展 ShareLaTeX 容器内可用字体 |
 | 安装 LaTeX 宏包 | `scheme-full` / 常用论文模板宏包 / 自定义包列表 | 通过 `tlmgr` 安装宏包；常用模式包含 `collection-latexextra` |
 | 自动检测并修复现有安装 | 已存在的 toolkit/config/容器配置 | 适合中断、半安装或重新运行脚本后遇到初始化失败的情况 |
+
+### 4. 本地管理命令
+
+安装脚本会自动写入本地命令 `/usr/local/bin/oversei`，并创建大写别名 `OVERSEI`。后续不需要重复拉取脚本，直接运行：
+
+```bash
+oversei --help
+oversei urls
+oversei status
+oversei packages
+OVERSEI repair
+```
+
+常用命令：
+
+| 命令 | 作用 |
+|:--|:--|
+| `oversei urls` | 查看精简后的推荐访问地址 |
+| `oversei urls --all` | 同时显示 Docker 内部地址 |
+| `oversei status` | 查看容器和端口状态 |
+| `oversei config` | 查看关键 Toolkit 配置 |
+| `oversei repair` | 自动检测并修复现有安装 |
+| `oversei packages` | 进入 LaTeX 宏包安装器 |
+| `oversei logs sharelatex` | 查看 ShareLaTeX 最近日志 |
 
 ---
 
@@ -201,7 +226,7 @@ docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
 - 如果 `8888` 被占用，请以脚本输出的实际端口为准。
 - 首次管理员初始化地址：`http://<ip>:<实际端口>/launchpad`。
 - 初始化后的登录地址：`http://<ip>:<实际端口>/login`。
-- 基础服务安装成功后，脚本会自动输出公网 IP、宿主机 IP、`localhost`、`127.0.0.1`，以及可检测到的 Docker 容器内部 IP 候选地址。Docker 内部地址通常使用 `80` 端口，一般只适合宿主机或 Docker 网络内部访问。
+- 基础服务安装成功后，脚本默认只输出公网地址、宿主机内网地址、`localhost` 和 `127.0.0.1`。如需查看 Docker 内部地址，可运行 `oversei urls --all`。
 
 ---
 

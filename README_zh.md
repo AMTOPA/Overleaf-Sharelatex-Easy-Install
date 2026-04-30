@@ -19,6 +19,7 @@
 - 🚀 **单命令部署**，基于官方 Overleaf Toolkit 部署 Overleaf Community Edition。
 - 🧩 **交互式菜单**，支持本地/服务器部署、MongoDB 版本、中文支持、字体和 LaTeX 宏包安装。
 - ✅ **MongoDB 8.0+ 兼容修复**，避免 MongoDB 6.x/7.x 导致 ShareLaTeX 启动 abort。
+- 🧩 **ARM64/aarch64 服务器兼容**，在 ARM 主机上自动为 ShareLaTeX 配置 `linux/amd64` 平台并安装 QEMU/binfmt 兼容依赖。
 - 🇨🇳 **中文界面与中文排版支持**，设置 `OVERLEAF_SITE_LANGUAGE=zh-CN`，安装 `ctex`、`xeCJK`、中文字体、Windows 核心字体，并支持 XeLaTeX 编译。
 - 🪞 **TeX Live 镜像兼容处理**，当容器内 TeX Live 年份落后于当前 CTAN 源时，自动切换到清华历史归档 `tlnet-final`。
 - 🔤 **字体安装器**，支持 Windows 核心字体、Adobe 字体、思源/Noto CJK 字体，并自动处理 `fontconfig` 与 `fc-cache`。
@@ -43,6 +44,7 @@ bash <(curl -sL --connect-timeout 10 https://raw.githubusercontent.com/AMTOPA/Ov
 - Linux 或 WSL 环境，并支持 `apt-get`。
 - `root` 权限。
 - Docker 与 Docker Compose。缺少 Compose 支持时，脚本会尽量自动安装。
+- ARM64/aarch64 服务器可以部署，但 ShareLaTeX 官方 CE 镜像会通过 `linux/amd64` 兼容模式运行，性能通常低于 x86_64 原生服务器。
 - 能访问 GitHub、Docker Hub、Ubuntu 软件源以及 CTAN/清华镜像源。
 - 默认使用 `8888` 端口。如需修改端口，可在生成 Overleaf Toolkit 配置后手动调整。
 
@@ -69,6 +71,24 @@ OVERSEI 现在会：
 - 可靠写入 `config/overleaf.rc` 中的 `MONGO_VERSION`。
 - 启动后检查实际运行的 MongoDB 版本。
 - MongoDB 或 ShareLaTeX 启动失败时中止安装并输出日志。
+
+---
+
+## 🧩 ARM64/aarch64 兼容性
+
+`sharelatex/sharelatex:6.1.2` 当前没有 ARM64 镜像清单。在 Oracle ARM、Ampere、树莓派等 aarch64 主机上，直接拉取会出现：
+
+```text
+no matching manifest for linux/arm64/v8 in the manifest list entries
+```
+
+OVERSEI 会在 ARM64 主机上自动：
+
+- 安装 `qemu-user-static` 与 `binfmt-support`。
+- 在 `config/docker-compose.override.yml` 写入 `sharelatex.platform=linux/amd64`。
+- 让 MongoDB/Redis 继续使用原生 ARM64 镜像，只有 ShareLaTeX 走 amd64 兼容模式。
+
+如果已经用旧脚本失败过，重新运行安装命令即可；也可以删除 `/root/overleaf/overleaf-toolkit/config/docker-compose.override.yml` 后再重跑，让脚本重新生成兼容配置。
 
 ---
 
@@ -121,6 +141,18 @@ grep '^MONGO_VERSION=' /root/overleaf/overleaf-toolkit/config/overleaf.rc
 ```
 
 版本必须是 `8.0` 或更高。
+
+### ARM64 服务器提示 `no matching manifest for linux/arm64/v8`
+
+请使用 v5.4 或更新的安装脚本重新运行安装命令。脚本会自动生成：
+
+```yaml
+services:
+  sharelatex:
+    platform: linux/amd64
+```
+
+并安装 amd64 容器兼容依赖。
 
 ### `tlmgr` 提示本地 TeX Live 旧于远程源
 

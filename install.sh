@@ -1,5 +1,5 @@
 #!/bin/bash
-# OVERSEI Installer v5.3
+# OVERSEI Installer v5.4
 # GitHub: https://github.com/AMTOPA/Overleaf-Sharelatex-Easy-Install  
 
 # 发送 API 计数请求（静默模式，不影响脚本执行）
@@ -13,6 +13,13 @@ DEFAULT_MONGO_VERSION="8.0"
 
 version_lt() {
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$1" ]
+}
+
+is_arm64_host() {
+    case "$(uname -m)" in
+        aarch64|arm64) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 get_latest_mongo_version() {
@@ -40,6 +47,131 @@ set_rc_value() {
     else
         printf '%s=%s\n' "$key" "$value" >> "$file"
     fi
+}
+
+ensure_amd64_emulation() {
+    if ! is_arm64_host; then
+        return 0
+    fi
+
+    echo -e "${YELLOW}▶ 检测到 ARM64/aarch64 主机，ShareLaTeX 官方镜像将使用 linux/amd64 兼容模式运行...${NC}"
+
+    if ! command -v qemu-x86_64-static &>/dev/null || ! command -v update-binfmts &>/dev/null; then
+        echo -e "${YELLOW}▶ 安装 amd64 容器兼容依赖: qemu-user-static binfmt-support...${NC}"
+        apt-get update && apt-get install -y qemu-user-static binfmt-support || {
+            echo -e "${RED}✗ 安装 amd64 兼容依赖失败，ARM64 主机无法运行 ShareLaTeX amd64 镜像${NC}"
+            return 1
+        }
+    fi
+
+    if command -v update-binfmts &>/dev/null; then
+        update-binfmts --enable qemu-x86_64 >/dev/null 2>&1 || true
+    fi
+
+    if command -v systemctl &>/dev/null; then
+        systemctl restart systemd-binfmt >/dev/null 2>&1 || true
+    fi
+
+    if [ -f /proc/sys/fs/binfmt_misc/qemu-x86_64 ]; then
+        echo -e "${GREEN}✓ amd64 容器兼容支持已启用${NC}"
+    else
+        echo -e "${YELLOW}⚠ 未检测到 qemu-x86_64 binfmt 注册项，Docker 可能无法启动 amd64 ShareLaTeX 容器${NC}"
+        echo -e "${YELLOW}   如果后续启动失败，请执行: systemctl restart systemd-binfmt && docker run --rm --platform linux/amd64 hello-world${NC}"
+    fi
+}
+
+configure_arm64_compose_override() {
+    local override_file="config/docker-compose.override.yml"
+    local tmp_file
+    local updated=0
+
+    if ! is_arm64_host; then
+        return 0
+    fi
+
+    if [ ! -f "$override_file" ]; then
+        cat > "$override_file" <<'EOF'
+services:
+  sharelatex:
+    platform: linux/amd64
+EOF
+        echo -e "${GREEN}✓ 已为 ARM64 主机配置 ShareLaTeX 使用 linux/amd64 镜像平台${NC}"
+        return 0
+    fi
+
+    if awk '
+        /^[[:space:]]*sharelatex:[[:space:]]*$/ { in_sharelatex=1; next }
+        in_sharelatex && /^  [A-Za-z0-9_.-]+:[[:space:]]*$/ { in_sharelatex=0 }
+        in_sharelatex && /^[[:space:]]*platform:[[:space:]]*linux\/amd64[[:space:]]*$/ { found=1 }
+        END { exit found ? 0 : 1 }
+    ' "$override_file"; then
+        echo -e "${GREEN}✓ ARM64 Docker Compose 平台配置已存在${NC}"
+        return 0
+    fi
+
+    cp "$override_file" "${override_file}.bak.$(date +%Y%m%d%H%M%S)" || {
+        echo -e "${RED}✗ 备份 $override_file 失败${NC}"
+        return 1
+    }
+
+    tmp_file=$(mktemp) || return 1
+    if grep -q '^  sharelatex:[[:space:]]*$' "$override_file"; then
+        awk '
+            BEGIN { in_sharelatex=0; inserted=0; replaced=0 }
+            function insert_platform() {
+                if (!inserted && !replaced) {
+                    print "    platform: linux/amd64"
+                    inserted=1
+                }
+            }
+            {
+                if (in_sharelatex && $0 ~ /^  [A-Za-z0-9_.-]+:[[:space:]]*$/) {
+                    insert_platform()
+                    in_sharelatex=0
+                }
+                if ($0 ~ /^  sharelatex:[[:space:]]*$/) {
+                    print
+                    in_sharelatex=1
+                    next
+                }
+                if (in_sharelatex && $0 ~ /^    platform:[[:space:]]*/) {
+                    print "    platform: linux/amd64"
+                    replaced=1
+                    next
+                }
+                print
+            }
+            END {
+                if (in_sharelatex) {
+                    insert_platform()
+                }
+            }
+        ' "$override_file" > "$tmp_file" && mv "$tmp_file" "$override_file" && updated=1
+    elif grep -q '^services:[[:space:]]*$' "$override_file"; then
+        awk '
+            {
+                print
+                if (!inserted && $0 ~ /^services:[[:space:]]*$/) {
+                    print "  sharelatex:"
+                    print "    platform: linux/amd64"
+                    inserted=1
+                }
+            }
+        ' "$override_file" > "$tmp_file" && mv "$tmp_file" "$override_file" && updated=1
+    else
+        {
+            cat "$override_file"
+            printf '\nservices:\n  sharelatex:\n    platform: linux/amd64\n'
+        } > "$tmp_file" && mv "$tmp_file" "$override_file" && updated=1
+    fi
+
+    if [ "$updated" -ne 1 ]; then
+        rm -f "$tmp_file"
+        echo -e "${RED}✗ 更新 $override_file 失败${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}✓ 已更新 ARM64 Docker Compose 平台配置: ${override_file}${NC}"
 }
 
 get_container() {
@@ -245,7 +377,7 @@ cat << "EOF"
  ╚═════╝   ╚═══╝  ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝
 EOF
 
-echo -e "${CYAN}:: OVERSEI - Overleaf/ShareLaTeX Easy Installer v5.3 ::${NC}\n"
+echo -e "${CYAN}:: OVERSEI - Overleaf/ShareLaTeX Easy Installer v5.4 ::${NC}\n"
 
 # Check root
 [ "$(id -u)" != "0" ] && echo -e "${RED}✗ 请使用root用户运行!${NC}" && exit 1
@@ -400,6 +532,8 @@ install_base() {
     set_rc_value "MONGO_VERSION" "$MONGO_VERSION" "config/overleaf.rc"
     set_rc_value "SIBLING_CONTAINERS_ENABLED" "false" "config/overleaf.rc"
     configure_chinese_ui || return 1
+    ensure_amd64_emulation || return 1
+    configure_arm64_compose_override || return 1
 
     echo -e "${YELLOW}▶ 启动服务中...${NC}"
     

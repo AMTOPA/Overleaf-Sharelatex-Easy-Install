@@ -19,6 +19,7 @@
 - 🚀 **One-command deployment** for Overleaf Community Edition through the official Overleaf Toolkit.
 - 🧩 **Interactive menu system** for local/server deployment, MongoDB version, fonts, Chinese support, and LaTeX packages.
 - ✅ **MongoDB 8.0+ compatibility** to avoid the ShareLaTeX abort caused by MongoDB 6.x/7.x.
+- 🧩 **ARM64/aarch64 server compatibility** by configuring ShareLaTeX to run as `linux/amd64` with QEMU/binfmt support on ARM hosts.
 - 🇨🇳 **Chinese UI and typesetting support** with `OVERLEAF_SITE_LANGUAGE=zh-CN`, `ctex`, `xeCJK`, Chinese fonts, Windows core fonts, and XeLaTeX-ready configuration.
 - 🪞 **TeX Live repository compatibility** with automatic fallback to the TUNA historic `tlnet-final` mirror when the container TeX Live year is older than the current CTAN repository.
 - 🔤 **Font installers** for Windows core fonts, Adobe fonts, and Noto CJK fonts, including `fontconfig`/`fc-cache` handling.
@@ -43,6 +44,7 @@ bash <(curl -sL --connect-timeout 10 https://raw.githubusercontent.com/AMTOPA/Ov
 - Linux or WSL environment with `apt-get`.
 - Root privileges.
 - Docker and Docker Compose. The installer can install missing Compose support when possible.
+- ARM64/aarch64 servers are supported through `linux/amd64` compatibility mode for the ShareLaTeX CE image, which is usually slower than native x86_64.
 - Network access to GitHub, Docker Hub, Ubuntu package mirrors, and CTAN/TUNA mirrors.
 - Port `8888` available unless you edit the generated Overleaf Toolkit configuration manually.
 
@@ -69,6 +71,24 @@ OVERSEI now:
 - Writes `MONGO_VERSION` reliably to `config/overleaf.rc`.
 - Checks the actual running MongoDB version after startup.
 - Stops the installation and prints logs if MongoDB or ShareLaTeX fails.
+
+---
+
+## 🧩 ARM64/aarch64 Compatibility
+
+`sharelatex/sharelatex:6.1.2` currently does not provide an ARM64 image manifest. On Oracle ARM, Ampere, Raspberry Pi, and other aarch64 hosts, Docker can fail with:
+
+```text
+no matching manifest for linux/arm64/v8 in the manifest list entries
+```
+
+On ARM64 hosts, OVERSEI now:
+
+- Installs `qemu-user-static` and `binfmt-support`.
+- Writes `sharelatex.platform=linux/amd64` to `config/docker-compose.override.yml`.
+- Keeps MongoDB and Redis on native ARM64 images; only ShareLaTeX uses amd64 compatibility mode.
+
+If an older installer already failed, rerun the install command. You can also delete `/root/overleaf/overleaf-toolkit/config/docker-compose.override.yml` before rerunning if you want the installer to regenerate the override file.
 
 ---
 
@@ -121,6 +141,18 @@ grep '^MONGO_VERSION=' /root/overleaf/overleaf-toolkit/config/overleaf.rc
 ```
 
 It must be `8.0` or newer.
+
+### ARM64 servers report `no matching manifest for linux/arm64/v8`
+
+Rerun the install command with v5.4 or newer. The installer generates:
+
+```yaml
+services:
+  sharelatex:
+    platform: linux/amd64
+```
+
+and installs the amd64 container compatibility dependencies.
 
 ### `tlmgr` says the local TeX Live is older than the remote repository
 

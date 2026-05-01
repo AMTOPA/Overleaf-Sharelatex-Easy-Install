@@ -1001,42 +1001,71 @@ install_chinese() {
         install_status=$?
         
         # 创建中文字体目录并下载
-        echo "正在下载中文字体..."
+        echo "正在设置中文字体..."
         mkdir -p /usr/share/fonts/chinese
         mkdir -p /usr/local/texlive/texmf-local/fonts/truetype/oversei
-        simsun_ok=0
 
+        # 始终安装系统 CJK 字体作为可靠的基线
+        echo "安装系统 CJK 字体（Noto/WenQuanYi）作为基线..."
+        apt-get install -y fonts-noto-cjk fonts-noto fonts-wqy-zenhei fonts-wqy-microhei 2>/dev/null || true
+
+        # 下载 SimSun 字体（带文件校验）
+        simsun_ok=0
         if [ ! -f "/usr/share/fonts/chinese/simsun.ttc" ]; then
-            wget -q --timeout=15 --tries=3 -O /usr/share/fonts/chinese/simsun.ttc \
-                "https://github.com/jiaxiaochu/font/raw/master/simsun.ttc" || \
-            wget -q --timeout=15 --tries=3 -O /usr/share/fonts/chinese/simsun.ttc \
-                "https://mirrors.tuna.tsinghua.edu.cn/deepin/pool/non-free/f/fonts-simsun/simsun.ttc" || \
-            wget -q --timeout=15 --tries=3 -O /usr/share/fonts/chinese/simsun.ttc \
-                "https://raw.githubusercontent.com/AMTOPA/font/main/simsun.ttc" || true
+            echo "尝试下载 SimSun 字体..."
+            for url in \
+                "https://raw.githubusercontent.com/AMTOPA/font/main/simsun.ttc" \
+                "https://github.com/jiaxiaochu/font/raw/master/simsun.ttc" \
+                "https://mirrors.tuna.tsinghua.edu.cn/deepin/pool/non-free/f/fonts-simsun/simsun.ttc"; do
+                rm -f /usr/share/fonts/chinese/simsun.ttc
+                wget -q --timeout=30 --tries=2 -O /usr/share/fonts/chinese/simsun.ttc "$url" 2>/dev/null || continue
+                # 校验下载的是合法字体文件而非 HTML 错误页
+                if [ -s /usr/share/fonts/chinese/simsun.ttc ] && file /usr/share/fonts/chinese/simsun.ttc 2>/dev/null | grep -qi "font\|truetype\|opentype"; then
+                    break
+                fi
+                rm -f /usr/share/fonts/chinese/simsun.ttc
+            done
         fi
-        if [ -s "/usr/share/fonts/chinese/simsun.ttc" ]; then
+        if [ -f "/usr/share/fonts/chinese/simsun.ttc" ] && [ -s "/usr/share/fonts/chinese/simsun.ttc" ]; then
             cp -f /usr/share/fonts/chinese/simsun.ttc /usr/local/texlive/texmf-local/fonts/truetype/oversei/simsun.ttc
             simsun_ok=1
+            echo "SimSun 字体下载成功"
+        else
+            echo "SimSun 下载失败，将使用系统 CJK 字体作为替代"
         fi
 
+        # 下载 simkai 字体（带文件校验）
+        simkai_ok=0
         if [ ! -f "/usr/share/fonts/chinese/simkai.ttf" ]; then
-            wget -q --timeout=15 --tries=3 -O /usr/share/fonts/chinese/simkai.ttf \
-                "https://github.com/jiaxiaochu/font/raw/master/simkai.ttf" || \
-            wget -q --timeout=15 --tries=3 -O /usr/share/fonts/chinese/simkai.ttf \
-                "https://mirrors.tuna.tsinghua.edu.cn/deepin/pool/non-free/f/fonts-simsun/simkai.ttf" || true
+            echo "尝试下载 simkai 字体..."
+            for url in \
+                "https://raw.githubusercontent.com/AMTOPA/font/main/simkai.ttf" \
+                "https://github.com/jiaxiaochu/font/raw/master/simkai.ttf" \
+                "https://mirrors.tuna.tsinghua.edu.cn/deepin/pool/non-free/f/fonts-simsun/simkai.ttf"; do
+                rm -f /usr/share/fonts/chinese/simkai.ttf
+                wget -q --timeout=30 --tries=2 -O /usr/share/fonts/chinese/simkai.ttf "$url" 2>/dev/null || continue
+                if [ -s /usr/share/fonts/chinese/simkai.ttf ] && file /usr/share/fonts/chinese/simkai.ttf 2>/dev/null | grep -qi "font\|truetype\|opentype"; then
+                    break
+                fi
+                rm -f /usr/share/fonts/chinese/simkai.ttf
+            done
         fi
-        [ -s "/usr/share/fonts/chinese/simkai.ttf" ] && cp -f /usr/share/fonts/chinese/simkai.ttf /usr/local/texlive/texmf-local/fonts/truetype/oversei/simkai.ttf
+        if [ -f "/usr/share/fonts/chinese/simkai.ttf" ] && [ -s "/usr/share/fonts/chinese/simkai.ttf" ]; then
+            cp -f /usr/share/fonts/chinese/simkai.ttf /usr/local/texlive/texmf-local/fonts/truetype/oversei/simkai.ttf
+            simkai_ok=1
+            echo "simkai 字体下载成功"
+        else
+            echo "simkai 下载失败，将使用系统 CJK 字体作为替代"
+        fi
 
-        # 如果 SimSun 下载失败，安装 Noto CJK 作为可靠的中文字体后备
-        if [ "$simsun_ok" -eq 0 ]; then
-            echo "SimSun 下载失败，安装 Noto CJK 作为后备中文字体..."
-            apt-get install -y fonts-noto-cjk fonts-noto 2>/dev/null || true
-        fi
+        # 更新 TeX Live 字体数据库
         mktexlsr >/dev/null 2>&1 || true
 
-        # 刷新字体缓存和 XeLaTeX/LuaLaTeX 字体数据库
+        # 刷新系统字体缓存
         echo "正在刷新字体缓存..."
         fc-cache -fv 2>/dev/null || true
+
+        # 更新 LuaLaTeX 字体数据库
         luaotfload-tool --update --quiet 2>/dev/null || true
 
         # 检查安装结果
@@ -1045,8 +1074,24 @@ install_chinese() {
         kpsewhich xeCJK.sty >/dev/null && echo "✓ xeCJK 已安装" || { echo "✗ xeCJK 未安装"; check_status=1; }
         fc-match "Times New Roman" | grep -qi "Times New Roman" && echo "✓ Times New Roman 已安装" || { echo "✗ Times New Roman 未安装"; check_status=1; }
         fc-match "Arial" | grep -qi "Arial" && echo "✓ Arial 已安装" || { echo "✗ Arial 未安装"; check_status=1; }
-        fc-match "SimSun" | grep -qi "SimSun" && echo "✓ SimSun 已安装" || { fc-match "Noto Sans CJK SC" | grep -qi "Noto" && echo "✓ Noto CJK 已安装 (SimSun 后备)"; } || { echo "✗ 中文字体未安装"; check_status=1; }
-        kpsewhich simkai.ttf >/dev/null && echo "✓ simkai.ttf 已加入 TeX Live 字体树" || { echo "✗ simkai.ttf 未加入 TeX Live 字体树"; check_status=1; }
+        if fc-match "SimSun" 2>/dev/null | grep -qi "SimSun"; then
+            echo "✓ SimSun 已安装"
+        elif fc-match "Noto Sans CJK SC" 2>/dev/null | grep -qi "Noto"; then
+            echo "✓ Noto Sans CJK SC 已安装（SimSun 不可用时的替代）"
+        elif fc-match "WenQuanYi" 2>/dev/null | grep -qi "WenQuanYi"; then
+            echo "✓ WenQuanYi 已安装（SimSun 不可用时的替代）"
+        else
+            echo "✗ 中文字体未安装"
+            check_status=1
+        fi
+        if kpsewhich simkai.ttf >/dev/null 2>&1; then
+            echo "✓ simkai.ttf 已加入 TeX Live 字体树"
+        elif fc-list 2>/dev/null | grep -qi "simkai\|KaiTi"; then
+            echo "✓ 楷体已通过系统字体可用"
+        else
+            echo "✗ simkai 未安装"
+            check_status=1
+        fi
         [ "$install_status" -eq 0 ] && [ "$check_status" -eq 0 ]
     '
     
@@ -1195,7 +1240,7 @@ install_fonts() {
 }
 
 install_default_fonts() {
-    echo -e "\n${YELLOW}▶ 正在安装推荐字体包（Windows 核心字体 + Noto CJK）...${NC}"
+    echo -e "\n${YELLOW}▶ 正在安装推荐字体包（Windows 核心字体 + Noto CJK + WenQuanYi）...${NC}"
     local SHARELATEX_CONTAINER
 
     SHARELATEX_CONTAINER=$(get_container "sharelatex" "sharelatex")
@@ -1212,7 +1257,7 @@ install_default_fonts() {
         export DEBIAN_FRONTEND=noninteractive
         echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula boolean true" | debconf-set-selections
         apt-get update
-        apt-get install -y fontconfig cabextract xfonts-utils ttf-mscorefonts-installer fonts-noto-cjk fonts-noto
+        apt-get install -y fontconfig cabextract xfonts-utils ttf-mscorefonts-installer fonts-noto-cjk fonts-noto fonts-wqy-zenhei fonts-wqy-microhei
         fc-cache -fv >/dev/null 2>&1 || true
         luaotfload-tool --update --quiet 2>/dev/null || true
         check_status=0

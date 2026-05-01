@@ -842,7 +842,7 @@ print_banner() {
  ╚═════╝   ╚═══╝  ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝
 EOF
 
-    echo -e "${CYAN}:: OVERSEI - Overleaf/ShareLaTeX Easy Installer v5.9 ::${NC}\n"
+    echo -e "${CYAN}:: OVERSEI - Overleaf/ShareLaTeX Easy Installer v6.0 ::${NC}\n"
 }
 
 # Main Menu
